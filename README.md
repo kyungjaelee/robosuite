@@ -1,6 +1,8 @@
-# robosuite
+# customized robosuite
 
-This is forked repository of the original robosuite
+This is a forked repository of the original robosuite
+
+# robosuite
 
 ![gallery of_environments](docs/images/gallery.png)
 
