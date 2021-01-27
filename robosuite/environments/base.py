@@ -3,10 +3,6 @@ from mujoco_py import MjSim, MjRenderContextOffscreen
 from mujoco_py import load_model_from_xml
 
 from robosuite.utils import SimulationError, XMLError, MujocoPyRenderer
-import robosuite.utils.macros as macros
-from robosuite.models.base import MujocoModel
-
-import numpy as np
 
 REGISTERED_ENVS = {}
 
@@ -48,7 +44,7 @@ class EnvMeta(type):
         cls = super().__new__(meta, name, bases, class_dict)
 
         # List all environments that should not be registered here.
-        _unregistered_envs = ["MujocoEnv", "RobotEnv", "ManipulationEnv", "SingleArmEnv", "TwoArmEnv"]
+        _unregistered_envs = ["MujocoEnv", "RobotEnv"]
 
         if cls.__name__ not in _unregistered_envs:
             register_env(cls)
@@ -75,10 +71,6 @@ class MujocoEnv(metaclass=EnvMeta):
         render_visual_mesh (bool): True if rendering visual meshes
             in camera. False otherwise.
 
-        render_gpu_device_id (int): corresponds to the GPU device id to use for offscreen rendering.
-            Defaults to -1, in which case the device will be inferred from environment variables
-            (GPUS or CUDA_VISIBLE_DEVICES).
-
         control_freq (float): how many control signals to receive
             in every simulated second. This sets the amount of simulation time
             that passes between every action input.
@@ -101,8 +93,7 @@ class MujocoEnv(metaclass=EnvMeta):
         render_camera="frontview",
         render_collision_mesh=False,
         render_visual_mesh=True,
-        render_gpu_device_id=-1,
-        control_freq=20,
+        control_freq=10,
         horizon=1000,
         ignore_done=False,
         hard_reset=True
@@ -117,17 +108,13 @@ class MujocoEnv(metaclass=EnvMeta):
         self.render_camera = render_camera
         self.render_collision_mesh = render_collision_mesh
         self.render_visual_mesh = render_visual_mesh
-        self.render_gpu_device_id = render_gpu_device_id
         self.viewer = None
 
         # Simulation-specific attributes
-        self._observables = {}                      # Maps observable names to observable objects
-        self._obs_cache = {}                        # Maps observable names to pre-/partially-computed observable values
         self.control_freq = control_freq
         self.horizon = horizon
         self.ignore_done = ignore_done
         self.hard_reset = hard_reset
-        self._model_postprocessor = None            # Function to post-process model after load_model() call
         self.model = None
         self.cur_time = None
         self.model_timestep = None
@@ -137,17 +124,11 @@ class MujocoEnv(metaclass=EnvMeta):
         # Load the model
         self._load_model()
 
-        # Post-process model
-        self._postprocess_model()
-
         # Initialize the simulation
         self._initialize_sim()
 
         # Run all further internal (re-)initialization required
         self._reset_internal()
-
-        # Load observables
-        self._observables = self._setup_observables()
 
     def initialize_time(self, control_freq):
         """
@@ -157,52 +138,27 @@ class MujocoEnv(metaclass=EnvMeta):
             control_freq (float): Hz rate to run control loop at within the simulation
         """
         self.cur_time = 0
-        self.model_timestep = macros.SIMULATION_TIMESTEP
+        self.model_timestep = self.sim.model.opt.timestep
         if self.model_timestep <= 0:
-            raise ValueError("Invalid simulation timestep defined!")
+            raise XMLError("xml model defined non-positive time step")
         self.control_freq = control_freq
         if control_freq <= 0:
-            raise SimulationError("Control frequency {} is invalid".format(control_freq))
+            raise SimulationError(
+                "control frequency {} is invalid".format(control_freq)
+            )
         self.control_timestep = 1. / control_freq
-
-    def set_model_postprocessor(self, postprocessor):
-        """
-        Sets the post-processor function that self.model will be passed to after load_model() is called during resets.
-
-        Args:
-            postprocessor (None or function): If set, postprocessing method should take in a Task-based instance and
-                return no arguments.
-        """
-        self._model_postprocessor = postprocessor
 
     def _load_model(self):
         """Loads an xml model, puts it in self.model"""
         pass
 
-    def _postprocess_model(self):
-        """
-        Post-processes model after load_model() call. Useful for external objects (e.g.: wrappers) to
-        be able to modify the sim model before it is actually loaded into the simulation
-        """
-        if self._model_postprocessor is not None:
-            self._model_postprocessor(self.model)
-
-    def _setup_references(self):
+    def _get_reference(self):
         """
         Sets up references to important components. A reference is typically an
         index or a list of indices that point to the corresponding elements
         in a flatten array, which is how MuJoCo stores physical simulation data.
         """
         pass
-
-    def _setup_observables(self):
-        """
-        Sets up observables to be used for this environment.
-
-        Returns:
-            OrderedDict: Dictionary mapping observable names to its corresponding Observable object
-        """
-        return OrderedDict()
 
     def _initialize_sim(self, xml_string=None):
         """
@@ -217,7 +173,7 @@ class MujocoEnv(metaclass=EnvMeta):
 
         # Create the simulation instance and run a single step to make sure changes have propagated through sim state
         self.sim = MjSim(self.mjpy_model)
-        self.sim.forward()
+        self.sim.step()
 
         # Setup sim time based on control frequency
         self.initialize_time(self.control_freq)
@@ -234,7 +190,6 @@ class MujocoEnv(metaclass=EnvMeta):
         if self.hard_reset and not self.deterministic_reset:
             self._destroy_viewer()
             self._load_model()
-            self._postprocess_model()
             self._initialize_sim()
         # Else, we only reset the sim internally
         else:
@@ -242,17 +197,7 @@ class MujocoEnv(metaclass=EnvMeta):
         # Reset necessary robosuite-centric variables
         self._reset_internal()
         self.sim.forward()
-        # Setup observables, reloading if
-        self._obs_cache = {}
-        if self.hard_reset:
-            # If we're using hard reset, must re-update sensor object references
-            _observables = self._setup_observables()
-            for obs_name, obs in _observables.items():
-                self.modify_observable(observable_name=obs_name, attribute="sensor", modifier=obs._sensor)
-        # Make sure that all sites are toggled OFF by default
-        self.visualize(vis_settings={vis: False for vis in self._visualizations})
-        # Return new observations
-        return self._get_observations()
+        return self._get_observation()
 
     def _reset_internal(self):
         """Resets simulation internal configurations."""
@@ -276,31 +221,19 @@ class MujocoEnv(metaclass=EnvMeta):
 
         elif self.has_offscreen_renderer:
             if self.sim._render_context_offscreen is None:
-                render_context = MjRenderContextOffscreen(self.sim, device_id=self.render_gpu_device_id)
+                render_context = MjRenderContextOffscreen(self.sim)
                 self.sim.add_render_context(render_context)
             self.sim._render_context_offscreen.vopt.geomgroup[0] = (1 if self.render_collision_mesh else 0)
             self.sim._render_context_offscreen.vopt.geomgroup[1] = (1 if self.render_visual_mesh else 0)
 
         # additional housekeeping
         self.sim_state_initial = self.sim.get_state()
-        self._setup_references()
+        self._get_reference()
         self.cur_time = 0
         self.timestep = 0
         self.done = False
 
-        # Empty observation cache and reset all observables
-        self._obs_cache = {}
-        for observable in self._observables.values():
-            observable.reset()
-
-    def _update_observables(self):
-        """
-        Updates all observables in this environment
-        """
-        for observable in self._observables.values():
-            observable.update(timestep=self.model_timestep, obs_cache=self._obs_cache)
-
-    def _get_observations(self):
+    def _get_observation(self):
         """
         Grabs observations from the environment.
 
@@ -308,29 +241,7 @@ class MujocoEnv(metaclass=EnvMeta):
             OrderedDict: OrderedDict containing observations [(name_string, np.array), ...]
 
         """
-        observations = OrderedDict()
-        obs_by_modality = OrderedDict()
-
-        # Loop through all observables and grab their current observation
-        for obs_name, observable in self._observables.items():
-            if observable.is_enabled() and observable.is_active():
-                obs = observable.obs
-                observations[obs_name] = obs
-                modality = observable.modality + "-state"
-                if modality not in obs_by_modality:
-                    obs_by_modality[modality] = []
-                # Make sure all observations are numpy arrays so we can concatenate them
-                array_obs = [obs] if type(obs) in {int, float} or not obs.shape else obs
-                obs_by_modality[modality].append(np.array(array_obs))
-
-        # Add in modality observations
-        for modality, obs in obs_by_modality.items():
-            # To save memory, we only concatenate the image observations if explicitly requested
-            if modality == "image-state" and not macros.CONCATENATE_IMAGES:
-                continue
-            observations[modality] = np.concatenate(obs, axis=-1)
-
-        return observations
+        return OrderedDict()
 
     def step(self, action):
         """
@@ -368,14 +279,13 @@ class MujocoEnv(metaclass=EnvMeta):
             self.sim.forward()
             self._pre_action(action, policy_step)
             self.sim.step()
-            self._update_observables()
             policy_step = False
 
         # Note: this is done all at once to avoid floating point inaccuracies
         self.cur_time += self.control_timestep
 
         reward, done, info = self._post_action(action)
-        return self._get_observations(), reward, done, info
+        return self._get_observation(), reward, done, info
 
     def _pre_action(self, action, policy_step=False):
         """
@@ -406,7 +316,6 @@ class MujocoEnv(metaclass=EnvMeta):
 
         # done if number of elapsed timesteps is greater than horizon
         self.done = (self.timestep >= self.horizon) and not self.ignore_done
-
         return reward, self.done, {}
 
     def reward(self, action):
@@ -439,35 +348,27 @@ class MujocoEnv(metaclass=EnvMeta):
         Returns:
             OrderedDict: Observations from the environment
         """
-        observation = self._get_observations()
+        observation = self._get_observation()
         return observation
 
-    def clear_objects(self, object_names):
+    @property
+    def action_spec(self):
         """
-        Clears objects with the name @object_names out of the task space. This is useful
-        for supporting task modes with single types of objects, as in
-        @self.single_object_mode without changing the model definition.
+        Action specification should be implemented in subclasses.
 
-        Args:
-            object_names (str or list of str): Name of object(s) to remove from the task workspace
+        Action space is represented by a tuple of (low, high), which are two numpy
+        vectors that specify the min/max action limits per dimension.
         """
-        object_names = {object_names} if type(object_names) is str else set(object_names)
-        for obj in self.model.mujoco_objects:
-            if obj.name in object_names:
-                self.sim.data.set_joint_qpos(obj.joints[0], np.array((10, 10, 10, 1, 0, 0, 0)))
+        raise NotImplementedError
 
-    def visualize(self, vis_settings):
+    @property
+    def action_dim(self):
         """
-        Do any needed visualization here
-
-        Args:
-            vis_settings (dict): Visualization keywords mapped to T/F, determining whether that specific
-                component should be visualized. Should have "env" keyword as well as any other relevant
-                options specified.
+        Size of the action space
+        Returns:
+            int: Action space dimension
         """
-        # Set visuals for environment objects
-        for obj in self.model.mujoco_objects:
-            obj.set_sites_visibility(sim=self.sim, visible=vis_settings["env"])
+        raise NotImplementedError
 
     def reset_from_xml_string(self, xml_string):
         """
@@ -492,112 +393,26 @@ class MujocoEnv(metaclass=EnvMeta):
         # Turn off deterministic reset
         self.deterministic_reset = False
 
-    def check_contact(self, geoms_1, geoms_2=None):
+    def find_contacts(self, geoms_1, geoms_2):
         """
         Finds contact between two geom groups.
 
         Args:
-            geoms_1 (str or list of str or MujocoModel): an individual geom name or list of geom names or a model. If
-                a MujocoModel is specified, the geoms checked will be its contact_geoms
-            geoms_2 (str or list of str or MujocoModel or None): another individual geom name or list of geom names.
-                If a MujocoModel is specified, the geoms checked will be its contact_geoms. If None, will check
-                any collision with @geoms_1 to any other geom in the environment
+            geoms_1 (list of str): a list of geom names
+            geoms_2 (list of str): another list of geom names
 
         Returns:
-            bool: True if any geom in @geoms_1 is in contact with any geom in @geoms_2.
+            generator: iterator of all contacts between @geoms_1 and @geoms_2
         """
-        # Check if either geoms_1 or geoms_2 is a string, convert to list if so
-        if type(geoms_1) is str:
-            geoms_1 = [geoms_1]
-        elif isinstance(geoms_1, MujocoModel):
-            geoms_1 = geoms_1.contact_geoms
-        if type(geoms_2) is str:
-            geoms_2 = [geoms_2]
-        elif isinstance(geoms_2, MujocoModel):
-            geoms_2 = geoms_2.contact_geoms
-        for contact in self.sim.data.contact[: self.sim.data.ncon]:
+        for contact in self.sim.data.contact[0 : self.sim.data.ncon]:
             # check contact geom in geoms
             c1_in_g1 = self.sim.model.geom_id2name(contact.geom1) in geoms_1
-            c2_in_g2 = self.sim.model.geom_id2name(contact.geom2) in geoms_2 if geoms_2 is not None else True
+            c2_in_g2 = self.sim.model.geom_id2name(contact.geom2) in geoms_2
             # check contact geom in geoms (flipped)
             c2_in_g1 = self.sim.model.geom_id2name(contact.geom2) in geoms_1
-            c1_in_g2 = self.sim.model.geom_id2name(contact.geom1) in geoms_2 if geoms_2 is not None else True
+            c1_in_g2 = self.sim.model.geom_id2name(contact.geom1) in geoms_2
             if (c1_in_g1 and c2_in_g2) or (c1_in_g2 and c2_in_g1):
-                return True
-        return False
-
-    def get_contacts(self, model):
-        """
-        Checks for any contacts with @model (as defined by @model's contact_geoms) and returns the set of
-        geom names currently in contact with that model (excluding the geoms that are part of the model itself).
-
-        Args:
-            model (MujocoModel): Model to check contacts for.
-
-        Returns:
-            set: Unique geoms that are actively in contact with this model.
-
-        Raises:
-            AssertionError: [Invalid input type]
-        """
-        # Make sure model is MujocoModel type
-        assert isinstance(model, MujocoModel), \
-            "Inputted model must be of type MujocoModel; got type {} instead!".format(type(model))
-        contact_set = set()
-        for contact in self.sim.data.contact[: self.sim.data.ncon]:
-            # check contact geom in geoms; add to contact set if match is found
-            g1, g2 = self.sim.model.geom_id2name(contact.geom1), self.sim.model.geom_id2name(contact.geom2)
-            if g1 in model.contact_geoms and g2 not in model.contact_geoms:
-                contact_set.add(g2)
-            elif g2 in model.contact_geoms and g1 not in model.contact_geoms:
-                contact_set.add(g1)
-        return contact_set
-
-    def add_observable(self, observable):
-        """
-        Adds an observable to this environment.
-
-        Args:
-            observable (Observable): Observable instance.
-        """
-        assert observable.name not in self._observables,\
-            "Observable name {} is already associated with an existing observable! Use modify_observable(...) " \
-            "to modify a pre-existing observable.".format(observable.name)
-        self._observables[observable.name] = observable
-
-    def modify_observable(self, observable_name, attribute, modifier):
-        """
-        Modifies observable with associated name @observable_name, replacing the given @attribute with @modifier.
-
-        Args:
-             observable_name (str): Observable to modify
-             attribute (str): Observable attribute to modify.
-                Options are {`'sensor'`, `'corrupter'`, `'delayer'`, `'sampling_rate'`, `'enabled'`, `'active'`}
-             modifier (any): New function / value to replace with for observable. If a function, new signature should
-                match the function being replaced.
-        """
-        # Find the observable
-        assert observable_name in self._observables, "No valid observable with name {} found. Options are: {}".\
-            format(observable_name, self.observation_names)
-        obs = self._observables[observable_name]
-        # replace attribute accordingly
-        if attribute == "sensor":
-            obs.set_sensor(modifier)
-        elif attribute == "corrupter":
-            obs.set_corrupter(modifier)
-        elif attribute == "delayer":
-            obs.set_delayer(modifier)
-        elif attribute == "sampling_rate":
-            obs.set_sampling_rate(modifier)
-        elif attribute == "enabled":
-            obs.set_enabled(modifier)
-        elif attribute == "active":
-            obs.set_active(modifier)
-        else:
-            # Invalid attribute specified
-            raise ValueError("Invalid observable attribute specified. Requested: {}, valid options are {}".
-                             format(attribute, {"sensor", "corrupter", "delayer",
-                                                "sampling_rate", "enabled", "active"}))
+                yield contact
 
     def _check_success(self):
         """
@@ -620,76 +435,3 @@ class MujocoEnv(metaclass=EnvMeta):
     def close(self):
         """Do any cleanup necessary here."""
         self._destroy_viewer()
-
-    @property
-    def observation_modalities(self):
-        """
-        Modalities for this environment's observations
-
-        Returns:
-            set: All observation modalities
-        """
-        return set([observable.modality for observable in self._observables.values()])
-
-    @property
-    def observation_names(self):
-        """
-        Grabs all names for this environment's observables
-
-        Returns:
-            set: All observation names
-        """
-        return set(self._observables.keys())
-
-    @property
-    def enabled_observables(self):
-        """
-        Grabs all names of enabled observables for this environment. An observable is considered enabled if its values
-        are being continually computed / updated at each simulation timestep.
-
-        Returns:
-            set: All enabled observation names
-        """
-        return set([name for name, observable in self._observables.items() if observable.is_enabled()])
-
-    @property
-    def active_observables(self):
-        """
-        Grabs all names of active observables for this environment. An observable is considered active if its value is
-        being returned in the observation dict from _get_observations() call or from the step() call (assuming this
-        observable is enabled).
-
-        Returns:
-            set: All active observation names
-        """
-        return set([name for name, observable in self._observables.items() if observable.is_active()])
-
-    @property
-    def _visualizations(self):
-        """
-        Visualization keywords for this environment
-
-        Returns:
-            set: All components that can be individually visualized for this environment
-        """
-        return {"env"}
-
-    @property
-    def action_spec(self):
-        """
-        Action specification should be implemented in subclasses.
-
-        Action space is represented by a tuple of (low, high), which are two numpy
-        vectors that specify the min/max action limits per dimension.
-        """
-        raise NotImplementedError
-
-    @property
-    def action_dim(self):
-        """
-        Size of the action space
-
-        Returns:
-            int: Action space dimension
-        """
-        raise NotImplementedError

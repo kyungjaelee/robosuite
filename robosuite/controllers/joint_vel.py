@@ -1,5 +1,5 @@
 from robosuite.controllers.base_controller import Controller
-from robosuite.utils.buffers import RingBuffer
+from robosuite.utils.control_utils import RingBuffer
 import numpy as np
 
 
@@ -104,7 +104,7 @@ class JointVelocityController(Controller):
         self.last_joint_vel = np.zeros(self.joint_dim)
 
         # limits
-        self.velocity_limits = np.array(velocity_limits) if velocity_limits is not None else None
+        self.velocity_limits = velocity_limits
 
         # control frequency
         self.control_freq = policy_freq

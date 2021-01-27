@@ -1,4 +1,5 @@
 from .arena import Arena
+from .custom_table_arena import CustomTableArena
 from .table_arena import TableArena
 from .pegs_arena import PegsArena
 from .bins_arena import BinsArena

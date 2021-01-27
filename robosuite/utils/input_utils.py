@@ -9,7 +9,6 @@ from robosuite.models.robots import *
 from robosuite.robots import *
 import robosuite.utils.transform_utils as T
 
-
 def choose_environment():
     """
     Prints out environment options, and returns the selected env_name choice
