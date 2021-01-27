@@ -10,509 +10,312 @@ from robosuite.utils import transform_utils as tf
 from matplotlib import pyplot as plt
 
 
-class Object(object):
-    def __init__(self, name, mesh_idx, pose, logical_state):
-        self.name = name
-        self.mesh_idx = mesh_idx
-        self.pose = pose
-        self.logical_state = logical_state
-
-
-def get_obj_idx_by_name(object_list, name):
-    for obj_idx, obj in enumerate(object_list):
-        if obj.name == name:
-            return obj_idx
-    return None
-
-
-def get_held_object(object_list):
-    for obj_idx, obj in enumerate(object_list):
-        if "held" in obj.logical_state:
-            return obj_idx
-    return None
-
-
-def update_logical_state(object_list):
-    for obj in object_list:
-        if "on" in obj.logical_state:
-            for support_obj_name in obj.logical_state["on"]:
-                support_obj_idx = get_obj_idx_by_name(object_list, support_obj_name)
-                if "support" in object_list[support_obj_idx].logical_state:
-                    if obj.name in object_list[support_obj_idx].logical_state["support"]:
-                        continue
-                    else:
-                        object_list[support_obj_idx].logical_state["support"].append(obj.name)
-                else:
-                    object_list[support_obj_idx].logical_state["support"] = [obj.name]
-        if "support" in obj.logical_state:
-            for on_obj_name in obj.logical_state["support"]:
-                on_obj_idx = get_obj_idx_by_name(object_list, on_obj_name)
-                if "on" in object_list[on_obj_idx].logical_state:
-                    if obj.name in object_list[on_obj_idx].logical_state["on"]:
-                        continue
-                    else:
-                        object_list[on_obj_idx].logical_state["on"].append(obj.name)
-                else:
-                    object_list[on_obj_idx].logical_state["on"] = [obj.name]
-
-
-def create_random_rotation_mtx_from_x(x_axis):
-    rnd_axis = np.random.uniform(low=-1.0, high=1.0, size=(3,))
-    rnd_axis = rnd_axis / np.sqrt(np.sum(rnd_axis ** 2))
-
-    y_axis = np.cross(rnd_axis, x_axis)
-    y_axis = y_axis / np.sqrt(np.sum(y_axis ** 2))
-    z_axis = np.cross(x_axis, y_axis)
-    z_axis = z_axis / np.sqrt(np.sum(z_axis ** 2))
-
-    T = np.eye(4)
-    T[:3, 0] = x_axis
-    T[:3, 1] = y_axis
-    T[:3, 2] = z_axis
-
-    return T
-
-
-def create_random_rotation_mtx_from_y(y_axis):
-    rnd_axis = np.random.uniform(low=-1.0, high=1.0, size=(3,))
-    rnd_axis = rnd_axis / np.sqrt(np.sum(rnd_axis ** 2))
-
-    z_axis = np.cross(rnd_axis, y_axis)
-    z_axis = z_axis / np.sqrt(np.sum(z_axis ** 2))
-    x_axis = np.cross(y_axis, z_axis)
-    x_axis = x_axis / np.sqrt(np.sum(x_axis ** 2))
-
-    T = np.eye(4)
-    T[:3, 0] = x_axis
-    T[:3, 1] = y_axis
-    T[:3, 2] = z_axis
-
-    return T
-
-
-def create_random_rotation_mtx_from_z(z_axis):
-    rnd_axis = np.random.uniform(low=-1.0, high=1.0, size=(3,))
-    rnd_axis = rnd_axis / np.sqrt(np.sum(rnd_axis ** 2))
-
-    x_axis = np.cross(rnd_axis, z_axis)
-    x_axis = x_axis / np.sqrt(np.sum(x_axis ** 2))
-    y_axis = np.cross(z_axis, x_axis)
-    y_axis = y_axis / np.sqrt(np.sum(y_axis ** 2))
-
-    T = np.eye(4)
-    T[:3, 0] = x_axis
-    T[:3, 1] = y_axis
-    T[:3, 2] = z_axis
-
-    return T
-
-
-def sample_point_in_surface(mesh, face_idx):
-    probs = np.random.uniform(size=(3, 1))
-    probs = probs/np.sum(probs)
-    return np.sum(probs*mesh.vertices[mesh.faces[face_idx]], axis=0)
-
-
-def sample_initial_pose(obj1, obj2, _meshes, _coll_mngr, spawn_pose=[0.5, 0.], bnd_size=0.3):
-    mesh1 = _meshes[obj1.mesh_idx]
-    T1 = obj1.pose
-    mesh2 = _meshes[obj2.mesh_idx]
-    if 'arch_box' not in obj2.name:
-        T2 = obj2.pose.dot(rotation_matrix(np.pi / 2., [0., 1., 0.], [0., 0., 0.]))
-    else:
-        T2 = obj2.pose
-    while True:
-        while True:
-            normals1_world = T1[:3, :3].dot(mesh1.face_normals.T).T
-            candidate_face_indices = np.where(normals1_world[:, 2] > np.cos(np.pi / 10.))[0]
-            face_idx = np.random.choice(candidate_face_indices, 1)[0]
-
-            pnt1 = sample_point_in_surface(mesh1, face_idx)
-            normal1 = mesh1.face_normals[face_idx]
-            normal1_world = T1[:3, :3].dot(normal1)
-            pnt1_world = T1[:3, :3].dot(pnt1) + T1[:3, 3]
-            if normal1_world[2] > np.cos(np.pi / 10.) and np.abs(spawn_pose[0] - pnt1_world[0]) < bnd_size and \
-                    np.abs(spawn_pose[1] - pnt1_world[1]) < bnd_size:
-                break
-
-        while True:
-            normals2_world = T2[:3, :3].dot(mesh2.face_normals.T).T
-            candidate_face_indices = np.where(-normals2_world[:, 2] > np.cos(np.pi / 10.))[0]
-            if len(candidate_face_indices) == 0:
-                face_idx = np.random.choice(mesh2.face_normals.shape[0], 1)[0]
-            else:
-                face_idx = np.random.choice(candidate_face_indices, 1)[0]
-            # print(normals2_world[face_idx])
-
-            pnt2 = sample_point_in_surface(mesh2, face_idx)
-            normal2 = mesh2.face_normals[face_idx]
-            normal2_world = T2[:3, :3].dot(normal2)
-            # print(normal2_world)
-            if len(candidate_face_indices) == 0 or -normal2_world[2] > np.cos(np.pi / 10.):
-                break
-
-        target_pnts = pnt1 + 1e-10 * normal1
-        target_normals = -normal1
-        T_target = create_random_rotation_mtx_from_z(target_normals)
-        T_target[:3, 3] = target_pnts
-
-        T_source = create_random_rotation_mtx_from_z(normal2)
-        T_source[:3, 3] = pnt2
-
-        T2_new = T1.dot(T_target.dot(np.linalg.inv(T_source)))
-
-        _coll_mngr.set_transform(obj2.name, T2_new)
-        if not _coll_mngr.in_collision_internal():
-            return T2_new
-    return None
-
-
-# def sample_on_pose_in_goal(goal_obj, obj1, meshes, coll_mngr, n_sampling_trial=100):
-#     goal_mesh = meshes[goal_obj.mesh_idx]
-#     T1 = goal_obj.pose
-#     goal_normals_world = -T1[:3, :3].dot(goal_mesh.face_normals.T).T
-#     candidate_face_indices = np.where(goal_normals_world[:, 2] > np.cos(np.pi / 10.))[0]
-#     face_idx = np.random.choice(candidate_face_indices, 1)[0]
-#
-#     pnt1 = sample_point_in_surface(goal_mesh, face_idx)
-#     normal1 = -goal_mesh.face_normals[face_idx]
-
-
-# def sample_on_pose_in_goal(table_obj, obj2, goal_obj, meshes, coll_mngr, n_sampling_trial=100):
-#     table_mesh = deepcopy(meshes[table_obj.mesh_idx])
-#     table_mesh.apply_transform(table_obj.pose)
-#
-#     goal_mesh = deepcopy(meshes[goal_obj.mesh_idx])
-#     goal_mesh.apply_transform(goal_obj.pose)
-#     sampling_bounds = goal_mesh.bounds
-#     mesh2 = meshes[obj2.mesh_idx]
-#     for _ in range(n_sampling_trial):
-#         sampled_point = (sampling_bounds[1] - sampling_bounds[0])*np.random.uniform(size=3) + sampling_bounds[0]
-#
-#
-#         pnt1 = sample_point_in_surface(mesh1, face_idx)
-#         normal1 = mesh1.face_normals[face_idx]
-#
-#         pnts2, tri2_idices = mesh2.sample(1, return_index=True)
-#         normals2 = mesh2.face_normals[tri2_idices]
-#
-#         target_pnts = pnt1 + 1e-10 * normal1
-#         target_normals = -normal1
-#         T_target = create_random_rotation_mtx_from_z(target_normals)
-#         T_target[:3, 3] = target_pnts
-#
-#         T_source = create_random_rotation_mtx_from_z(normals2[0])
-#         T_source[:3, 3] = pnts2
-#
-#         T2 = T1.dot(T_target.dot(np.linalg.inv(T_source)))
-#
-#         coll_mngr.set_transform(obj2.name, T2)
-#         if not coll_mngr.in_collision_internal():
-#             return T2
-#     return None
-
-def critical_vertices_detector(_mesh):
-    critical_edges = _mesh.face_adjacency_edges[(_mesh.face_adjacency_angles > np.pi/2.5) * _mesh.face_adjacency_convex]
-    critical_vertices = np.unique(critical_edges.reshape((-1,)))
-    return critical_edges, critical_vertices
-
-
-def sample_critical_contact_frame(_mesh):
-    critical_edges, critical_vertices = critical_vertices_detector(_mesh)
-    critical_vertex = np.random.choice(critical_vertices)
-    T = np.eye(4)
-    while True:
-        face_indices = _mesh.vertex_faces[critical_vertex]
-        f1, f2 = np.random.choice(face_indices[face_indices > 0], size=2)
-        x_axis = _mesh.face_normals[f1]
-        z_axis = _mesh.face_normals[f2]
-        y_axis = np.cross(z_axis, x_axis)
-        if np.sum(y_axis ** 2) > 0.:
-            y_axis = y_axis / np.sqrt(np.sum(y_axis ** 2))
-            T[:3, 0] = x_axis
-            T[:3, 1] = y_axis
-            T[:3, 2] = z_axis
-            break
-        else:
-            continue
-
-    T[:3, 3] = _mesh.vertices[critical_vertex]
-    return T
-
-
-def sample_pose_in_goal_mesh(table_obj, obj2, goal_obj, meshes, coll_mngr, n_sampling_trial=10):
-    goal_mesh = deepcopy(meshes[goal_obj.mesh_idx])
-    goal_mesh = goal_mesh.apply_transform(goal_obj.pose)
-    table_mesh = deepcopy(meshes[table_obj.mesh_idx])
-    table_mesh = table_mesh.apply_transform(table_obj.pose)
-    mesh2 = meshes[obj2.mesh_idx]
-
-    for _ in range(n_sampling_trial):
-        T_target = sample_critical_contact_frame(goal_mesh)
-        T_source = sample_critical_contact_frame(mesh2)
-        T2 = T_target.dot(np.linalg.inv(T_source))
-        coll_mngr.set_transform(obj2.name, T2)
-        if not coll_mngr.in_collision_internal():
-            return T2
-    return None
-
-
-def sample_on_pose_with_bias(obj1, obj2, goal_obj, meshes, coll_mngr, n_sampling_trial=10, goal_unbias=0.3):
-    mesh1 = deepcopy(meshes[obj1.mesh_idx])
-    T1 = obj1.pose
-    normals1_world = T1[:3, :3].dot(mesh1.face_normals.T).T
-    candidate_face_indices = np.where(normals1_world[:, 2] > np.cos(np.pi / 10.))[0]
-
-    goal_mesh = deepcopy(meshes[goal_obj.mesh_idx])
-    goal_mesh.apply_transform(goal_obj.pose)
-    mesh2 = meshes[obj2.mesh_idx]
-    if len(candidate_face_indices) == 0:
-        return None
-    else:
-        for _ in range(n_sampling_trial):
-            if np.random.uniform() > goal_unbias:
-                sampled_point = []
-                face_indices = []
-                for face_idx in candidate_face_indices:
-                    for _ in range(10000):
-                        sampled_point.append(sample_point_in_surface(mesh1, face_idx))
-                        face_indices.append(face_idx)
-                sampled_point = np.asarray(sampled_point)
-                sampled_point_world = (T1[:3, :3].dot(sampled_point.T) + T1[:3, [3]]).T
-                distance_to_goal_mesh = goal_mesh.nearest.signed_distance(sampled_point_world)
-                face_idx = face_indices[np.argmax(distance_to_goal_mesh)]
-            else:
-                face_idx = np.random.choice(candidate_face_indices, 1)[0]
-
-                pnt1 = sample_point_in_surface(mesh1, face_idx)
-                normal1 = mesh1.face_normals[face_idx]
-
-                pnts2, tri2_idices = mesh2.sample(1, return_index=True)
-                normals2 = mesh2.face_normals[tri2_idices]
-
-                target_pnts = pnt1 + 1e-10 * normal1
-                target_normals = -normal1
-                T_target = create_random_rotation_mtx_from_z(target_normals)
-                T_target[:3, 3] = target_pnts
-
-                T_source = create_random_rotation_mtx_from_z(normals2[0])
-                T_source[:3, 3] = pnts2
-
-                T2 = T1.dot(T_target.dot(np.linalg.inv(T_source)))
-
-                coll_mngr.set_transform(obj2.name, T2)
-                if not coll_mngr.in_collision_internal():
-                    return T2
-        return None
-
-
-def sample_on_pose(obj1, obj2, meshes, coll_mngr, n_sampling_trial=10):
-    mesh1 = meshes[obj1.mesh_idx]
-    T1 = obj1.pose
-    mesh2 = meshes[obj2.mesh_idx]
-    normals1_world = T1[:3, :3].dot(mesh1.face_normals.T).T
-    candidate_face_indices = np.where(normals1_world[:, 2] > np.cos(np.pi / 10.))[0]
-    if len(candidate_face_indices) == 0:
-        return None
-    else:
-        for _ in range(n_sampling_trial):
-            face_idx = np.random.choice(candidate_face_indices, 1)[0]
-
-            pnt1 = sample_point_in_surface(mesh1, face_idx)
-            normal1 = mesh1.face_normals[face_idx]
-
-            pnts2, tri2_idices = mesh2.sample(1, return_index=True)
-            normals2 = mesh2.face_normals[tri2_idices]
-
-            target_pnts = pnt1 + 1e-10 * normal1
-            target_normals = -normal1
-            T_target = create_random_rotation_mtx_from_z(target_normals)
-            T_target[:3, 3] = target_pnts
-
-            T_source = create_random_rotation_mtx_from_z(normals2[0])
-            T_source[:3, 3] = pnts2
-
-            T2 = T1.dot(T_target.dot(np.linalg.inv(T_source)))
-
-            coll_mngr.set_transform(obj2.name, T2)
-            if not coll_mngr.in_collision_internal():
-                return T2
-        return None
-
-
-def sample_grasp_pose(obj1, meshes, n_sampling_trial=100):
-    mesh1 = meshes[obj1.mesh_idx]
-    T1 = obj1.pose
-    for _ in range(n_sampling_trial):
-        pnts1, tri1_idices = mesh1.sample(1, return_index=True)
-        normals1 = mesh1.face_normals[tri1_idices]
-
-        locations, index_ray, index_tri = mesh1.ray.intersects_location(
-            ray_origins=pnts1 - 1e-5 * normals1,
-            ray_directions=-normals1)
-
-        pnts2 = locations[0]
-        c_pnt = (pnts1 + pnts2) / 2.
-
-        y_axis = pnts2 - pnts1
-        dist = np.sqrt(np.sum(y_axis ** 2))
-        y_axis = y_axis / np.sqrt(np.sum(y_axis ** 2))
-        T_grasp = create_random_rotation_mtx_from_y(y_axis)
-        T_grasp[:3, 3] = c_pnt
-
-        T_retreat = deepcopy(T_grasp)
-        approaching_dir = T_retreat[:3, 2]
-        T_retreat[:3, 3] = c_pnt - 8e-2 * approaching_dir
-
-        hand_T_grasp = T1.dot(T_grasp)
-        hand_T_retreat = T1.dot(T_retreat)
-        if hand_T_grasp[2, 2] < -0.7:
-            return hand_T_grasp, hand_T_retreat, T_grasp, dist / 2.
-    return None
-
-
-def get_meshes():
-    mesh_types = ['arch_box',
-                  'rect_box',
-                  'square_box',
-                  'half_cylinder_box',
-                  'triangle_box',
-                  'twin_tower_goal',
-                  'box_goal',
-                  'custom_table']
-    mesh_files = ['/home/kj/robosuite/robosuite/models/assets/objects/meshes/arch_box.stl',
-                  '/home/kj/robosuite/robosuite/models/assets/objects/meshes/rect_box.stl',
-                  '/home/kj/robosuite/robosuite/models/assets/objects/meshes/square_box.stl',
-                  '/home/kj/robosuite/robosuite/models/assets/objects/meshes/half_cylinder_box.stl',
-                  '/home/kj/robosuite/robosuite/models/assets/objects/meshes/triangle_box.stl',
-                  '/home/kj/robosuite/robosuite/models/assets/objects/meshes/twin_tower_goal.stl',
-                  '/home/kj/robosuite/robosuite/models/assets/objects/meshes/box_goal.stl',
-                  '/home/kj/robosuite/robosuite/models/assets/objects/meshes/custom_table.stl']
-    mesh_units = [0.001, 0.001, 0.001, 0.001, 0.001, 0.001, 0.001, 0.01]
-    n_mesh_types = len(mesh_types)
+def get_meshes(_mesh_types=['arch_box',
+                            'rect_box',
+                            'square_box',
+                            'half_cylinder_box',
+                            'triangle_box',
+                            'twin_tower_goal',
+                            'tower_goal',
+                            'box_goal',
+                            'custom_table'],
+               _mesh_files=['./robosuite/models/assets/objects/meshes/arch_box.stl',
+                            './robosuite/models/assets/objects/meshes/rect_box.stl',
+                            './robosuite/models/assets/objects/meshes/square_box.stl',
+                            './robosuite/models/assets/objects/meshes/half_cylinder_box.stl',
+                            './robosuite/models/assets/objects/meshes/triangle_box.stl',
+                            './robosuite/models/assets/objects/meshes/twin_tower_goal.stl',
+                            './robosuite/models/assets/objects/meshes/tower_goal.stl',
+                            './robosuite/models/assets/objects/meshes/box_goal.stl',
+                            './robosuite/models/assets/objects/meshes/custom_table.stl'],
+               _mesh_units=[0.001, 0.001, 0.001, 0.001, 0.001, 0.0011, 0.0011, 0.0011, 0.01],
+               _area_ths=0.003,
+               _rotation_types=4):
 
     _meshes = []
-    for mesh_type, mesh_file, unit in zip(mesh_types, mesh_files, mesh_units):
+    _contact_points = []
+    _contact_faces = []
+
+    for mesh_type, mesh_file, unit in zip(_mesh_types, _mesh_files, _mesh_units):
         mesh = trimesh.load(mesh_file)
 
-        # clean mesh vertices and surfaces
-        # mesh.remove_degenerate_faces()
-        # mesh.remove_unreferenced_vertices()
-        # mesh.remove_infinite_values()
-        # mesh.remove_duplicate_faces()
-
-        # centering a mesh
         mesh.apply_scale(unit)
         mesh.apply_translation(-mesh.center_mass)
+        while True:
+            indices, = np.where(mesh.area_faces > _area_ths)
+            if len(indices) > 0:
+                mesh = mesh.subdivide(indices)
+            else:
+                break
 
-        # set random stable pose
-        if mesh_type is not "custom_table":
-            stable_poses, probs = mesh.compute_stable_poses()
-            stable_pose_idx = np.argmax(probs)
-            # stable_pose = stable_poses[stable_pose_idx]
-            # mesh.apply_transform(stable_pose)
+        if 'table' in mesh_type:
+            points = np.mean(mesh.vertices[mesh.faces], axis=1)
+            # find top surfaces of the mesh
+            faces, = np.where(points[:, 2] == np.max(points, axis=0)[2])
+            points = points[faces]
+        elif 'goal' in mesh_type:
+            points = np.mean(mesh.vertices[mesh.faces], axis=1)
+            # find bottom surfaces of the mesh
+            faces, = np.where(
+                np.logical_and(mesh.face_normals[:, 2] < - 0.99, points[:, 2] == np.min(points, axis=0)[2]))
+            points = points[faces]
+        else:
+            faces = np.arange(mesh.faces.shape[0])
+            points = np.mean(mesh.vertices[mesh.faces], axis=1)
 
         _meshes.append(mesh)
-    return _meshes, mesh_types, mesh_files, mesh_units
+        _contact_faces.append(faces)
+        _contact_points.append(points)
+
+    return _mesh_types, _mesh_files, _mesh_units, _meshes, _rotation_types, _contact_faces, _contact_points
 
 
-def table_objects_initializer(n_obj_per_mesh_types=[0, 2, 2, 2, 2, 0, 0, 0], spawn_pose=[0.5, 0.], bnd_size=0.2, random_initial=True):
-    _meshes, mesh_types, mesh_files, mesh_units = get_meshes()
+class Object(object):
+    def __init__(self, _name, _mesh_idx, _pose, _logical_state):
+        self.name = _name
+        self.mesh_idx = _mesh_idx
+        self.pose = _pose
+        self.logical_state = _logical_state
+        self.color = [np.random.uniform(), np.random.uniform(), np.random.uniform(), 0.3]
+
+
+def get_obj_idx_by_name(_object_list, _name):
+    for _obj_idx, _obj in enumerate(_object_list):
+        if _obj.name == _name:
+            return _obj_idx
+    return None
+
+
+def get_held_object(_object_list):
+    for _obj_idx, _obj in enumerate(_object_list):
+        if "held" in _obj.logical_state: return _obj_idx
+    return None
+
+
+def update_logical_state(_object_list):
+    for _obj in _object_list:
+        if "on" in _obj.logical_state:
+            for _support_obj_name in _obj.logical_state["on"]:
+                _support_obj_idx = get_obj_idx_by_name(_object_list, _support_obj_name)
+                if "support" in _object_list[_support_obj_idx].logical_state:
+                    if _obj.name in _object_list[_support_obj_idx].logical_state["support"]:
+                        continue
+                    else:
+                        _object_list[_support_obj_idx].logical_state["support"].append(_obj.name)
+                else:
+                    _object_list[_support_obj_idx].logical_state["support"] = [_obj.name]
+
+        if "support" in _obj.logical_state:
+            for _on_obj_name in _obj.logical_state["support"]:
+                _on_obj_idx = get_obj_idx_by_name(_object_list, _on_obj_name)
+                if "on" in _object_list[_on_obj_idx].logical_state:
+                    if _obj.name in _object_list[_on_obj_idx].logical_state["on"]:
+                        continue
+                    else:
+                        _object_list[_on_obj_idx].logical_state["on"].append(_obj.name)
+                else:
+                    _object_list[_on_obj_idx].logical_state["on"] = [_obj.name]
+
+
+def rotation_matrix(axis, theta):
+    """
+    Return the rotation matrix associated with counterclockwise rotation about
+    the given axis by theta radians.
+    """
+    axis = np.asarray(axis)
+    axis = axis / math.sqrt(np.dot(axis, axis))
+    a = math.cos(theta / 2.0)
+    b, c, d = -axis * math.sin(theta / 2.0)
+    aa, bb, cc, dd = a * a, b * b, c * c, d * d
+    bc, ad, ac, ab, bd, cd = b * c, a * d, a * c, a * b, b * d, c * d
+    return np.array([[aa + bb - cc - dd, 2 * (bc + ad), 2 * (bd - ac), 0],
+                     [2 * (bc - ad), aa + cc - bb - dd, 2 * (cd + ab), 0],
+                     [2 * (bd + ac), 2 * (cd - ab), aa + dd - bb - cc, 0],
+                     [0, 0, 0, 1]])
+
+
+def rotation_matrix_from_z_x(z_axis):
+    x_axis = [1, 0, 0]
+    y_axis = np.cross(z_axis, x_axis)
+    if np.sqrt(np.sum(y_axis ** 2)) > 0.:
+        y_axis = y_axis / np.sqrt(np.sum(y_axis ** 2))
+        x_axis = np.cross(y_axis, z_axis)
+        x_axis = x_axis / np.sqrt(np.sum(x_axis ** 2))
+    else:
+        x_axis = [0, 1, 0]
+        y_axis = np.cross(z_axis, x_axis)
+        if np.sqrt(np.sum(y_axis ** 2)) > 0.:
+            y_axis = y_axis / np.sqrt(np.sum(y_axis ** 2))
+            x_axis = np.cross(y_axis, z_axis)
+            x_axis = x_axis / np.sqrt(np.sum(x_axis ** 2))
+        else:
+            x_axis = [0, 0, 1]
+            y_axis = np.cross(z_axis, x_axis)
+            y_axis = y_axis / np.sqrt(np.sum(y_axis ** 2))
+            x_axis = np.cross(y_axis, z_axis)
+            x_axis = x_axis / np.sqrt(np.sum(x_axis ** 2))
+
+    T = np.eye(4)
+    T[:3, 0] = x_axis
+    T[:3, 1] = y_axis
+    T[:3, 2] = z_axis
+
+    return T
+
+
+def get_grasp_pose():
+    # TO DO
+    return None
+
+
+def get_on_pose(_name1, _pnt1, _normal1, _rotation1, _pnt2, _normal2, _pose2, _coll_mngr):
+    target_pnt = _pnt1 + 1e-10 * _normal1
+    T_target = rotation_matrix_from_z_x(-_normal1).dot(rotation_matrix([0, 0, 1], _rotation1))
+    T_target[:3, 3] = target_pnt
+
+    T_source = rotation_matrix_from_z_x(_normal2)
+    T_source[:3, 3] = _pnt2
+
+    _T1 = _pose2.dot(T_source.dot(np.linalg.inv(T_target)))
+    _coll_mngr.set_transform(_name1, _T1)
+    if not _coll_mngr.in_collision_internal():
+        return _T1
+    else:
+        return None
+
+
+def configuration_initializer(_mesh_types, _meshes, _rotation_types, _contact_faces, _contact_points,
+                              goal_name='tower_goal'):
     _object_list = []
     _coll_mngr = trimesh.collision.CollisionManager()
 
-    goal_name = 'box_goal'
-    goal_pose = np.array([0.4, 0.0, 0.573077+0.211923])
-    goal_mesh_idx = 6
-    goal_T = np.eye(4)
-    goal_T[:3, 3] = goal_pose
-    _goal_obj = Object(goal_name, goal_mesh_idx, goal_T, {"goal": []})
+    if 'tower_goal' in goal_name:
+        n_obj_per_mesh_types = [0, 1, 1, 1, 0, 0, 0, 0, 0, 0]
+    elif 'twin_tower_goal' in goal_name:
+        n_obj_per_mesh_types=[0, 2, 2, 0, 2, 0, 0, 0, 0, 0]
+    elif 'stack_easy' in goal_name:
+        n_obj_per_mesh_types=[0, 3, 3, 0, 0, 0, 0, 0, 0, 0]
+    elif 'stack_difficult' in goal_name:
+        n_obj_per_mesh_types=[0, 2, 2, 2, 2, 0, 0, 0, 0, 0]
+    else:
+        assert Exception('goal name is wrong!!!')
+
+    table_spawn_position = [0.3, 0.2]
+    table_spawn_bnd_size = 0.075
 
     table_name = 'custom_table'
     table_pose = np.array([0.6, 0.0, 0.573077])
-    table_mesh_idx = 7
+    table_mesh_idx = _mesh_types.index(table_name)
     table_T = np.eye(4)
     table_T[:3, 3] = table_pose
-    table_top_z_offset_from_com = np.max(_meshes[table_mesh_idx].bounds, axis=0)[2]
     table_obj = Object(table_name, table_mesh_idx, table_T, {"static": []})
 
     _object_list.append(table_obj)
     _coll_mngr.add_object(table_name, _meshes[table_mesh_idx])
     _coll_mngr.set_transform(table_name, table_T)
 
+    table_contact_points = _contact_points[table_mesh_idx]
+    table_contact_normals = _meshes[table_mesh_idx].face_normals[_contact_faces[table_mesh_idx]]
+
+    table_contact_points_world = table_T[:3, :3].dot(table_contact_points.T).T + table_T[:3, 3]
+    table_contact_normals_world = table_T[:3, :3].dot(table_contact_normals.T).T
+    table_contact_indices, = np.where(
+        np.logical_and(
+            np.logical_and(
+                table_contact_normals_world[:, 2] > 0.,
+                np.abs(table_spawn_position[0] - table_contact_points_world[:, 0]) < table_spawn_bnd_size
+            ), np.abs(table_spawn_position[1] - table_contact_points_world[:, 1]) < table_spawn_bnd_size
+        )
+    )
+
+    _contact_points[table_mesh_idx] = _contact_points[table_mesh_idx][table_contact_indices]
+    _contact_faces[table_mesh_idx] = _contact_faces[table_mesh_idx][table_contact_indices]
+
+    if 'goal' in goal_name:
+        goal_mesh_idx = _mesh_types.index(goal_name)
+        goal_pose = np.array([0.4, 0.0, _meshes[table_mesh_idx].bounds[1][2] - _meshes[table_mesh_idx].bounds[0][2]
+                              - _meshes[goal_mesh_idx].bounds[0][2]])
+        goal_T = np.eye(4)
+        goal_T[:3, 3] = goal_pose
+        _goal_obj = Object(goal_name, goal_mesh_idx, goal_T, {"goal": []})
+    else:
+        _goal_obj = None
+
     for mesh_idx, n_obj in enumerate(n_obj_per_mesh_types):
         obj_mesh_idx = mesh_idx
         for obj_idx in range(n_obj):
-            obj_name = mesh_types[mesh_idx] + str(obj_idx)
+            obj_name = _mesh_types[mesh_idx] + str(obj_idx)
 
-            if "custom_table" not in mesh_types[mesh_idx]:
+            # Find stable pose
+            if "custom_table" not in _mesh_types[mesh_idx]:
                 stable_poses, probs = _meshes[mesh_idx].compute_stable_poses(n_samples=100)
                 stable_pose_idx = np.argmax(probs)
                 stable_pose = stable_poses[stable_pose_idx]
-                if "half_cylinder_box" in mesh_types[mesh_idx] or "triangle_box" in mesh_types[mesh_idx]:
-                    stable_pose = tf.rotation_matrix(-np.pi/2., [1., 0., 0.]).dot(stable_pose)
+
+                if "half_cylinder_box" in _mesh_types[mesh_idx] or "triangle_box" in _mesh_types[mesh_idx]:
+                    stable_pose = rotation_matrix([1., 0., 0.], -np.pi / 2.).dot(stable_pose)
+                elif "arch_box" in _mesh_types[mesh_idx]:
+                    stable_pose = rotation_matrix([1., 0., 0.], np.pi / 2.).dot(stable_pose)
+
+                stable_pose = stable_pose.dot(rotation_matrix([0., 1., 0.], np.pi / 2.))
             else:
                 stable_pose = np.eye(4)
 
             new_obj = Object(obj_name, obj_mesh_idx, stable_pose, {"on": [table_name]})
-
             _coll_mngr.add_object(obj_name, _meshes[obj_mesh_idx])
-            if random_initial:
-                new_obj.pose = sample_initial_pose(table_obj, new_obj, _meshes, _coll_mngr, spawn_pose, bnd_size)
-            else:
-                new_obj.pose[:3, 3] = table_pose
-                new_obj.pose[2, 3] += 0.17 + 0.04*obj_idx + 0.04*np.sum(n_obj_per_mesh_types[:mesh_idx])
+
+            new_obj_contact_points = _contact_points[obj_mesh_idx]
+            new_obj_contact_normals = _meshes[obj_mesh_idx].face_normals[_contact_faces[obj_mesh_idx]]
+
+            new_obj_contact_normals_world = stable_pose[:3, :3].dot(new_obj_contact_normals.T).T
+            new_obj_contact_indices, = np.where(new_obj_contact_normals_world[:, 2] < -0.99)
+
+            table_contact_points = _contact_points[table_mesh_idx]
+            table_contact_normals = _meshes[table_mesh_idx].face_normals[_contact_faces[table_mesh_idx]]
+
+            table_contact_normals_world = table_T[:3, :3].dot(table_contact_normals.T).T
+            table_contact_indices, = np.where(table_contact_normals_world[:, 2] > 0.)
+
+            done = False
+            for i in new_obj_contact_indices:
+                for j in range(rotation_types):
+                    for k in table_contact_indices:
+                        pnt1 = new_obj_contact_points[i]
+                        normal1 = new_obj_contact_normals[i]
+
+                        pnt2 = table_contact_points[k]
+                        normal2 = table_contact_normals[k]
+
+                        pose1 = get_on_pose(new_obj.name, pnt1, normal1, 2.*np.pi*j/_rotation_types, pnt2, normal2,
+                                            table_T, _coll_mngr)
+                        if pose1 is not None:
+                            done = True
+                            break
+                    if done:
+                        break
+                if done:
+                    break
+            if done:
+                new_obj.pose = pose1
             _object_list.append(new_obj)
             update_logical_state(_object_list)
-    return _object_list, _meshes, _coll_mngr, _goal_obj
+
+    if _goal_obj is not None:
+        transform_g_t = np.linalg.inv(table_obj.pose).dot(_goal_obj.pose)
+        _contact_points[table_mesh_idx] = transform_g_t[:3, :3].dot(_contact_points[goal_mesh_idx].T).T \
+                                         + transform_g_t[:3, 3]
+        _contact_faces[table_mesh_idx] = _contact_faces[table_mesh_idx][:len(_contact_faces[goal_mesh_idx])]
+        # this is the most tricky part...
+    return _object_list, _goal_obj, _contact_points, _contact_faces, _coll_mngr, table_spawn_position, table_spawn_bnd_size
 
 
-def visualize(_object_list, _meshes):
-    trimesh_scene = trimesh.Scene()
-    for obj in _object_list:
-        trimesh_scene.add_geometry(_meshes[obj.mesh_idx], node_name=obj.name, transform=obj.pose)
-    trimesh_scene.show()
-
-
-def get_possible_actions(object_list):
-    action_list = []
-
-    # Check pick
-    if all(["held" not in obj.logical_state and "contact" not in obj.logical_state for obj in object_list]):
-        for obj in object_list:
-            if "support" not in obj.logical_state and "static" not in obj.logical_state and "prev_pick" not in obj.logical_state:
-                action_list.append({"type": "pick", "param": obj.name})
-
-    # Check place
-    if any(["held" in obj.logical_state for obj in object_list]):
-        for obj in object_list:
-            if "held" not in obj.logical_state:
-                action_list.append({"type": "place", "param": obj.name})
-
-    return action_list
-
-
-def get_possible_actions_with_bias(object_list, goal_obj, meshes):
-    action_list = []
-
-    # Check pick
-    if all(["held" not in obj.logical_state and "contact" not in obj.logical_state for obj in object_list]):
-        for obj in object_list:
-            if "support" not in obj.logical_state and "static" not in obj.logical_state and "prev_pick" not in obj.logical_state:
-                action_list.append({"type": "pick", "param": obj.name})
-
-    # Check place
-    if any(["held" in obj.logical_state for obj in object_list]):
-        goal_mesh = deepcopy(meshes[goal_obj.mesh_idx])
-        goal_mesh = goal_mesh.apply_transform(goal_obj.pose)
-        for obj in object_list:
-            obj_mesh = deepcopy(meshes[obj.mesh_idx])
-            obj_mesh = obj_mesh.apply_transform(obj.pose)
-            iou = goal_mesh.intersection(obj_mesh).volume/obj_mesh.volume
-            if "held" not in obj.logical_state and (iou > 0. or "static" in obj.logical_state):
-                action_list.append({"type": "place", "param": obj.name})
-
-    return action_list
+def visualize(_object_list, _meshes, _goal_obj=None):
+    mesh_scene = trimesh.Scene()
+    for _obj in _object_list:
+        mesh_scene.add_geometry(_meshes[_obj.mesh_idx], node_name=_obj.name, transform=_obj.pose)
+    if _goal_obj is not None:
+        mesh_scene.add_geometry(_meshes[_goal_obj.mesh_idx], node_name=_goal_obj.name, transform=_goal_obj.pose)
+    mesh_scene.show()
 
 
 def add_supporting_object(obj_idx, object_list, meshes, trimesh_scene):
@@ -628,70 +431,7 @@ def get_image(object_list, action, next_object_list, meshes=None, label=None, do
 
 
 if __name__ == '__main__':
-    object_list, meshes, coll_mngr, goal_obj = table_objects_initializer()
-    visualize(object_list, meshes)
-
-    action_list = get_possible_actions(object_list)
-    action = action_list[0]
-    print(action)
-
-    if action["type"] is "pick":
-        pick_obj_idx = get_obj_idx_by_name(object_list, action['param'])
-
-        object_list[pick_obj_idx].logical_state.clear()
-        object_list[pick_obj_idx].logical_state["held"] = []
-        update_logical_state(object_list)
-
-        for obj in object_list:
-            print(obj.name, obj.logical_state)
-
-    action_list = get_possible_actions(object_list)
-    action = action_list[0]
-    print(action)
-
-    if action["type"] is "place":
-        place_obj_idx = get_obj_idx_by_name(object_list, action['param'])
-        held_obj_idx = get_held_object(object_list)
-        object_list[held_obj_idx].pose = sample_on_pose(object_list[place_obj_idx], object_list[held_obj_idx], meshes,
-                                                        coll_mngr)
-
-        object_list[held_obj_idx].logical_state.clear()
-        object_list[held_obj_idx].logical_state["on"] = [object_list[place_obj_idx].name]
-        object_list[held_obj_idx].logical_state["prev_pick"] = []
-        update_logical_state(object_list)
-
-        for obj in object_list:
-            print(obj.name, obj.logical_state)
-
-    action_list = get_possible_actions(object_list)
-    action = action_list[0]
-    print(action)
-
-    if action["type"] is "pick":
-        pick_obj_idx = get_obj_idx_by_name(object_list, action['param'])
-
-        object_list[pick_obj_idx].logical_state.clear()
-        object_list[pick_obj_idx].logical_state["held"] = []
-        update_logical_state(object_list)
-
-        for obj in object_list:
-            print(obj.name, obj.logical_state)
-
-    action_list = get_possible_actions(object_list)
-    action = action_list[0]
-    print(action)
-
-    if action["type"] is "place":
-        place_obj_idx = get_obj_idx_by_name(object_list, action['param'])
-        held_obj_idx = get_held_object(object_list)
-        object_list[held_obj_idx].pose = sample_on_pose(object_list[place_obj_idx], object_list[held_obj_idx], meshes,
-                                                        coll_mngr)
-
-        object_list[held_obj_idx].logical_state.clear()
-        object_list[held_obj_idx].logical_state["on"] = [object_list[place_obj_idx].name]
-        object_list[held_obj_idx].logical_state["prev_pick"] = []
-        update_logical_state(object_list)
-
-        for obj in object_list:
-            print(obj.name, obj.logical_state)
-
+    mesh_types, mesh_files, mesh_units, meshes, rotation_types, contact_faces, contact_points = get_meshes()
+    initial_object_list, goal_obj, contact_points, contact_faces, coll_mngr, _, _ = \
+        configuration_initializer(mesh_types, meshes, rotation_types, contact_faces, contact_points)
+    visualize(initial_object_list, meshes, _goal_obj=goal_obj)
