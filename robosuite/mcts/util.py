@@ -10,27 +10,30 @@ from robosuite.utils import transform_utils as tf
 from matplotlib import pyplot as plt
 
 
-def get_meshes(_mesh_types=['arch_box',
-                            'rect_box',
-                            'square_box',
-                            'half_cylinder_box',
-                            'triangle_box',
-                            'twin_tower_goal',
-                            'tower_goal',
-                            'box_goal',
-                            'custom_table'],
-               _mesh_files=['./robosuite/models/assets/objects/meshes/arch_box.stl',
-                            './robosuite/models/assets/objects/meshes/rect_box.stl',
-                            './robosuite/models/assets/objects/meshes/square_box.stl',
-                            './robosuite/models/assets/objects/meshes/half_cylinder_box.stl',
-                            './robosuite/models/assets/objects/meshes/triangle_box.stl',
-                            './robosuite/models/assets/objects/meshes/twin_tower_goal.stl',
-                            './robosuite/models/assets/objects/meshes/tower_goal.stl',
-                            './robosuite/models/assets/objects/meshes/box_goal.stl',
-                            './robosuite/models/assets/objects/meshes/custom_table.stl'],
-               _mesh_units=[0.001, 0.001, 0.001, 0.001, 0.001, 0.0011, 0.0011, 0.0011, 0.01],
-               _area_ths=0.003,
-               _rotation_types=4):
+def get_meshes(_mesh_types=None, _mesh_files=None, _mesh_units=None, _area_ths=0.003, _rotation_types=4):
+
+    if _mesh_types is None:
+        _mesh_types = ['arch_box',
+                       'rect_box',
+                       'square_box',
+                       'half_cylinder_box',
+                       'triangle_box',
+                       'twin_tower_goal',
+                       'tower_goal',
+                       'box_goal',
+                       'custom_table']
+    if _mesh_files is None:
+        _mesh_files = ['./robosuite/models/assets/objects/meshes/arch_box.stl',
+                       './robosuite/models/assets/objects/meshes/rect_box.stl',
+                       './robosuite/models/assets/objects/meshes/square_box.stl',
+                       './robosuite/models/assets/objects/meshes/half_cylinder_box.stl',
+                       './robosuite/models/assets/objects/meshes/triangle_box.stl',
+                       './robosuite/models/assets/objects/meshes/twin_tower_goal.stl',
+                       './robosuite/models/assets/objects/meshes/tower_goal.stl',
+                       './robosuite/models/assets/objects/meshes/box_goal.stl',
+                       './robosuite/models/assets/objects/meshes/custom_table.stl']
+    if _mesh_units is None:
+        _mesh_units = [0.001, 0.001, 0.001, 0.001, 0.001, 0.0011, 0.0011, 0.0011, 0.01]
 
     _meshes = []
     _contact_points = []
