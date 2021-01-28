@@ -195,16 +195,18 @@ def configuration_initializer(_mesh_types, _meshes, _rotation_types, _contact_fa
     if 'tower_goal' in goal_name:
         n_obj_per_mesh_types = [0, 1, 1, 1, 0, 0, 0, 0, 0, 0]
     elif 'twin_tower_goal' in goal_name:
-        n_obj_per_mesh_types=[0, 2, 2, 0, 2, 0, 0, 0, 0, 0]
+        n_obj_per_mesh_types = [0, 2, 2, 0, 2, 0, 0, 0, 0, 0]
+    elif 'box_goal' in goal_name:
+        n_obj_per_mesh_types = [0, 3, 3, 0, 0, 0, 0, 0, 0, 0]
     elif 'stack_easy' in goal_name:
-        n_obj_per_mesh_types=[0, 3, 3, 0, 0, 0, 0, 0, 0, 0]
+        n_obj_per_mesh_types = [0, 3, 3, 0, 0, 0, 0, 0, 0, 0]
     elif 'stack_difficult' in goal_name:
-        n_obj_per_mesh_types=[0, 2, 2, 2, 2, 0, 0, 0, 0, 0]
+        n_obj_per_mesh_types = [0, 2, 2, 2, 2, 0, 0, 0, 0, 0]
     else:
         assert Exception('goal name is wrong!!!')
 
-    table_spawn_position = [0.3, 0.2]
-    table_spawn_bnd_size = 0.075
+    table_spawn_position = [0.4, 0.25]
+    table_spawn_bnd_size = 0.1
 
     table_name = 'custom_table'
     table_pose = np.array([0.6, 0.0, 0.573077])
@@ -236,7 +238,7 @@ def configuration_initializer(_mesh_types, _meshes, _rotation_types, _contact_fa
 
     if 'goal' in goal_name:
         goal_mesh_idx = _mesh_types.index(goal_name)
-        goal_pose = np.array([0.4, 0.0, _meshes[table_mesh_idx].bounds[1][2] - _meshes[table_mesh_idx].bounds[0][2]
+        goal_pose = np.array([0.4, 0.0, -0.02 + _meshes[table_mesh_idx].bounds[1][2] - _meshes[table_mesh_idx].bounds[0][2]
                               - _meshes[goal_mesh_idx].bounds[0][2]])
         goal_T = np.eye(4)
         goal_T[:3, 3] = goal_pose
@@ -281,7 +283,7 @@ def configuration_initializer(_mesh_types, _meshes, _rotation_types, _contact_fa
 
             done = False
             for i in new_obj_contact_indices:
-                for j in range(rotation_types):
+                for j in range(_rotation_types):
                     for k in table_contact_indices:
                         pnt1 = new_obj_contact_points[i]
                         normal1 = new_obj_contact_normals[i]
@@ -309,7 +311,8 @@ def configuration_initializer(_mesh_types, _meshes, _rotation_types, _contact_fa
                                          + transform_g_t[:3, 3]
         _contact_faces[table_mesh_idx] = _contact_faces[table_mesh_idx][:len(_contact_faces[goal_mesh_idx])]
         # this is the most tricky part...
-    return _object_list, _goal_obj, _contact_points, _contact_faces, _coll_mngr, table_spawn_position, table_spawn_bnd_size
+    return _object_list, _goal_obj, _contact_points, _contact_faces, _coll_mngr, table_spawn_position, \
+           table_spawn_bnd_size, n_obj_per_mesh_types
 
 
 def visualize(_object_list, _meshes, _goal_obj=None):
@@ -331,9 +334,7 @@ def add_supporting_object(obj_idx, object_list, meshes, trimesh_scene):
     return trimesh_scene
 
 
-def get_image(object_list, action, next_object_list, meshes=None, label=None, do_visualize=False):
-    if meshes is None:
-        meshes, mesh_types, mesh_files, mesh_units = get_meshes()
+def get_image(object_list, action, next_object_list, meshes, label=None, do_visualize=False):
 
     place_idx = get_obj_idx_by_name(next_object_list, action['param'])
     pick_idx = get_held_object(object_list)
@@ -433,8 +434,170 @@ def get_image(object_list, action, next_object_list, meshes=None, label=None, do
     return colors, depths, masks
 
 
+def get_possible_actions(_object_list, _meshes, _coll_mngr, _contact_points, _contact_faces, _rotation_types):
+    _action_list = []
+    for obj in _object_list:
+        _coll_mngr.set_transform(obj.name, obj.pose)
+
+    # Check pick
+    if all(["held" not in obj.logical_state for obj in _object_list]):
+        for obj in _object_list:
+            if "support" not in obj.logical_state and "static" not in obj.logical_state and \
+                    "done" not in obj.logical_state and "goal" not in obj.name:
+                _action_list.append({"type": "pick", "param": obj.name})
+
+    # Check place
+    held_obj_idx = get_held_object(_object_list)
+    if held_obj_idx is not None:
+        held_obj = _object_list[held_obj_idx]
+        obj2 = held_obj
+        obj2_mesh_idx = held_obj.mesh_idx
+        obj2_contact_points = _contact_points[obj2_mesh_idx]
+        obj2_contact_normals = _meshes[obj2_mesh_idx].face_normals[_contact_faces[obj2_mesh_idx]]
+
+        obj2_contact_normals_world = obj2.pose[:3, :3].dot(obj2_contact_normals.T).T
+        obj2_contact_indices, = np.where(obj2_contact_normals_world[:, 2] < 0.)
+
+        for obj1 in _object_list:
+            if "held" not in obj1.logical_state:
+                obj1_mesh_idx = obj1.mesh_idx
+                obj1_contact_points = _contact_points[obj1_mesh_idx]
+                obj1_contact_normals = _meshes[obj1_mesh_idx].face_normals[_contact_faces[obj1_mesh_idx]]
+
+                obj1_contact_normals_world = obj1.pose[:3, :3].dot(obj1_contact_normals.T).T
+                obj1_contact_indices, = np.where(obj1_contact_normals_world[:, 2] > 0.99)
+
+                for i in obj1_contact_indices:
+                    for j in range(_rotation_types):
+                        for k in obj2_contact_indices:
+                            pnt1 = obj1_contact_points[i]
+                            normal1 = obj1_contact_normals[i]
+
+                            pnt2 = obj2_contact_points[k]
+                            normal2 = obj2_contact_normals[k]
+
+                            pose = get_on_pose(obj2.name, pnt2, normal2, 2. * np.pi * j / _rotation_types,
+                                               pnt1, normal1, obj1.pose, _coll_mngr)
+
+                            if pose is not None:
+                                _action_list.append({"type": "place", "param": obj1.name, "placing_pose": pose})
+    return _action_list
+
+
+def get_transition(_object_list, _action):
+    next_object_list = deepcopy(_object_list)
+    if _action["type"] is "pick":
+        pick_obj_idx = get_obj_idx_by_name(next_object_list, _action['param'])
+        next_object_list[pick_obj_idx].logical_state.clear()
+        next_object_list[pick_obj_idx].logical_state["held"] = []
+        update_logical_state(next_object_list)
+
+    elif _action["type"] is "place":
+        place_obj_idx = get_obj_idx_by_name(next_object_list, _action['param'])
+        held_obj_idx = get_held_object(next_object_list)
+        support_obj_idx = get_obj_idx_by_name(next_object_list, next_object_list[held_obj_idx].logical_state["on"][0])
+        new_pose = _action["placing_pose"]
+        if new_pose is None:
+            return None
+
+        next_object_list[held_obj_idx].pose = new_pose
+        next_object_list[support_obj_idx].logical_state["support"].remove(next_object_list[held_obj_idx].name)
+        next_object_list[held_obj_idx].logical_state.clear()
+        next_object_list[held_obj_idx].logical_state["on"] = [next_object_list[place_obj_idx].name]
+        next_object_list[held_obj_idx].logical_state["done"] = []
+        update_logical_state(next_object_list)
+
+    return next_object_list
+
+
+def get_reward(_obj_list, _action, _goal_obj, _next_obj_list, _meshes):
+    if _next_obj_list is None:
+        return -np.inf
+    elif "pick" in _action["type"]:
+        return 0.0
+    elif "place" in _action["type"]:
+        if _goal_obj is None:
+            obj_height_list = []
+            for obj in _obj_list:
+                obj_height_list.append(obj.pose[2, 3])
+            curr_height = np.max(obj_height_list)
+
+            next_obj_height_list = []
+            for next_obj in _next_obj_list:
+                next_obj_height_list.append(next_obj.pose[2, 3])
+            next_height = np.max(next_obj_height_list)
+            return next_height - curr_height
+        else:
+            goal_mesh_copied = deepcopy(_meshes[_goal_obj.mesh_idx])
+            goal_mesh_copied.apply_transform(_goal_obj.pose)
+
+            rew = 0.
+            for obj in _obj_list:
+                if "table" not in obj.name:
+                    obj_mesh_copied = deepcopy(_meshes[obj.mesh_idx])
+                    obj_mesh_copied.apply_transform(obj.pose)
+
+                    signed_distance = trimesh.proximity.signed_distance(goal_mesh_copied, obj_mesh_copied.vertices)
+                    rew -= 1 / (1 + 100 * np.max(np.abs(signed_distance)))
+
+            for obj in _next_obj_list:
+                if "table" not in obj.name:
+                    obj_mesh_copied = deepcopy(_meshes[obj.mesh_idx])
+                    obj_mesh_copied.apply_transform(obj.pose)
+
+                    signed_distance = trimesh.proximity.signed_distance(goal_mesh_copied, obj_mesh_copied.vertices)
+                    rew += 1 / (1 + 100 * np.max(np.abs(signed_distance)))
+
+            return rew
+
+
 if __name__ == '__main__':
+
+    check_meshes = False
+
     mesh_types, mesh_files, mesh_units, meshes, rotation_types, contact_faces, contact_points = get_meshes()
     initial_object_list, goal_obj, contact_points, contact_faces, coll_mngr, _, _ = \
-        configuration_initializer(mesh_types, meshes, rotation_types, contact_faces, contact_points)
-    visualize(initial_object_list, meshes, _goal_obj=goal_obj)
+        configuration_initializer(mesh_types, meshes, rotation_types, contact_faces, contact_points, goal_name='tower_goal')
+    if check_meshes:
+        visualize(initial_object_list, meshes, _goal_obj=goal_obj)
+
+    # mesh_types, mesh_files, mesh_units, meshes, rotation_types, contact_faces, contact_points = get_meshes()
+    # initial_object_list, goal_obj, contact_points, contact_faces, coll_mngr, _, _ = \
+    #     configuration_initializer(mesh_types, meshes, rotation_types, contact_faces, contact_points, goal_name='twin_tower_goal')
+    # visualize(initial_object_list, meshes, _goal_obj=goal_obj)
+    #
+    # mesh_types, mesh_files, mesh_units, meshes, rotation_types, contact_faces, contact_points = get_meshes()
+    # initial_object_list, goal_obj, contact_points, contact_faces, coll_mngr, _, _ = \
+    #     configuration_initializer(mesh_types, meshes, rotation_types, contact_faces, contact_points, goal_name='box_goal')
+    # visualize(initial_object_list, meshes, _goal_obj=goal_obj)
+    #
+    # mesh_types, mesh_files, mesh_units, meshes, rotation_types, contact_faces, contact_points = get_meshes()
+    # initial_object_list, goal_obj, contact_points, contact_faces, coll_mngr, _, _ = \
+    #     configuration_initializer(mesh_types, meshes, rotation_types, contact_faces, contact_points, goal_name='stack_easy')
+    # visualize(initial_object_list, meshes, _goal_obj=goal_obj)
+    #
+    # mesh_types, mesh_files, mesh_units, meshes, rotation_types, contact_faces, contact_points = get_meshes()
+    # initial_object_list, goal_obj, contact_points, contact_faces, coll_mngr, _, _ = \
+    #     configuration_initializer(mesh_types, meshes, rotation_types, contact_faces, contact_points, goal_name='stack_difficult')
+    # visualize(initial_object_list, meshes, _goal_obj=goal_obj)
+
+    action_list = get_possible_actions(initial_object_list, meshes, coll_mngr,
+                                       contact_points, contact_faces, rotation_types)
+    print(len(action_list))
+    action = action_list[0]
+
+    object_list = get_transition(initial_object_list, action)
+    print(get_reward(initial_object_list, action, goal_obj, object_list, meshes))
+    if check_meshes:
+        visualize(object_list, meshes, _goal_obj=goal_obj)
+
+    action_list = get_possible_actions(object_list, meshes, coll_mngr,
+                                       contact_points, contact_faces, rotation_types)
+    print(len(action_list))
+    action = action_list[0]
+    next_object_list = get_transition(object_list, action)
+    print(get_reward(object_list, action, goal_obj, next_object_list, meshes))
+    if check_meshes:
+        visualize(next_object_list, meshes, _goal_obj=goal_obj)
+
+    get_image(object_list, action, next_object_list, meshes, do_visualize=True)
