@@ -33,7 +33,7 @@ def get_meshes(_mesh_types=None, _mesh_files=None, _mesh_units=None, _area_ths=0
                        './robosuite/models/assets/objects/meshes/box_goal.stl',
                        './robosuite/models/assets/objects/meshes/custom_table.stl']
     if _mesh_units is None:
-        _mesh_units = [0.001, 0.001, 0.001, 0.001, 0.001, 0.0011, 0.0011, 0.0011, 0.01]
+        _mesh_units = [0.001, 0.001, 0.001, 0.001, 0.001, 0.0011, 0.001, 0.0011, 0.01]
 
     _meshes = []
     _contact_points = []
@@ -187,26 +187,30 @@ def get_on_pose(_name1, _pnt1, _normal1, _rotation1, _pnt2, _normal2, _pose2, _c
         return None
 
 
-def configuration_initializer(_mesh_types, _meshes, _rotation_types, _contact_faces, _contact_points,
+def configuration_initializer(_mesh_types, _meshes, _mesh_units, _rotation_types, _contact_faces, _contact_points,
                               goal_name='tower_goal'):
     _object_list = []
     _coll_mngr = trimesh.collision.CollisionManager()
 
-    if 'tower_goal' in goal_name:
+    if 'tower_goal' is goal_name:
         n_obj_per_mesh_types = [0, 1, 1, 1, 0, 0, 0, 0, 0, 0]
-    elif 'twin_tower_goal' in goal_name:
+    elif 'twin_tower_goal' is goal_name:
         n_obj_per_mesh_types = [0, 2, 2, 0, 2, 0, 0, 0, 0, 0]
-    elif 'box_goal' in goal_name:
-        n_obj_per_mesh_types = [0, 3, 3, 0, 0, 0, 0, 0, 0, 0]
-    elif 'stack_easy' in goal_name:
-        n_obj_per_mesh_types = [0, 3, 3, 0, 0, 0, 0, 0, 0, 0]
-    elif 'stack_difficult' in goal_name:
-        n_obj_per_mesh_types = [0, 2, 2, 2, 2, 0, 0, 0, 0, 0]
+    elif 'box_goal' is goal_name:
+        n_obj_per_mesh_types = [0, 2, 4, 0, 0, 0, 0, 0, 0, 0]
+    elif 'stack_easy' is goal_name:
+        n_obj_per_mesh_types = [0, 2, 2, 0, 0, 0, 0, 0, 0, 0]
+    elif 'stack_hard' is goal_name:
+        n_obj_per_mesh_types = [0, 1, 1, 1, 1, 0, 0, 0, 0, 0]
     else:
         assert Exception('goal name is wrong!!!')
 
-    table_spawn_position = [0.4, 0.25]
-    table_spawn_bnd_size = 0.1
+    if 'goal' in goal_name:
+        table_spawn_position = [0.4, 0.25]
+        table_spawn_bnd_size = 0.1
+    else:
+        table_spawn_position = [0.4, 0.0]
+        table_spawn_bnd_size = 0.1
 
     table_name = 'custom_table'
     table_pose = np.array([0.6, 0.0, 0.573077])
@@ -238,7 +242,7 @@ def configuration_initializer(_mesh_types, _meshes, _rotation_types, _contact_fa
 
     if 'goal' in goal_name:
         goal_mesh_idx = _mesh_types.index(goal_name)
-        goal_pose = np.array([0.4, 0.0, -0.02 + _meshes[table_mesh_idx].bounds[1][2] - _meshes[table_mesh_idx].bounds[0][2]
+        goal_pose = np.array([0.4, 0.0, -0.019*_mesh_units[goal_mesh_idx]*1000 + _meshes[table_mesh_idx].bounds[1][2] - _meshes[table_mesh_idx].bounds[0][2]
                               - _meshes[goal_mesh_idx].bounds[0][2]])
         goal_T = np.eye(4)
         goal_T[:3, 3] = goal_pose
@@ -434,7 +438,7 @@ def get_image(object_list, action, next_object_list, meshes, label=None, do_visu
     return colors, depths, masks
 
 
-def get_possible_actions(_object_list, _meshes, _coll_mngr, _contact_points, _contact_faces, _rotation_types):
+def get_possible_actions(_object_list, _meshes, _coll_mngr, _contact_points, _contact_faces, _rotation_types, side_place_flag=False):
     _action_list = []
     for obj in _object_list:
         _coll_mngr.set_transform(obj.name, obj.pose)
@@ -456,7 +460,10 @@ def get_possible_actions(_object_list, _meshes, _coll_mngr, _contact_points, _co
         obj2_contact_normals = _meshes[obj2_mesh_idx].face_normals[_contact_faces[obj2_mesh_idx]]
 
         obj2_contact_normals_world = obj2.pose[:3, :3].dot(obj2_contact_normals.T).T
-        obj2_contact_indices, = np.where(obj2_contact_normals_world[:, 2] < 0.)
+        if side_place_flag:
+            obj2_contact_indices, = np.where(obj2_contact_normals_world[:, 2] < 1e-3)
+        else:
+            obj2_contact_indices, = np.where(obj2_contact_normals_world[:, 2] < 0.)
 
         for obj1 in _object_list:
             if "held" not in obj1.logical_state:
@@ -557,28 +564,28 @@ if __name__ == '__main__':
 
     mesh_types, mesh_files, mesh_units, meshes, rotation_types, contact_faces, contact_points = get_meshes()
     initial_object_list, goal_obj, contact_points, contact_faces, coll_mngr, _, _ = \
-        configuration_initializer(mesh_types, meshes, rotation_types, contact_faces, contact_points, goal_name='tower_goal')
+        configuration_initializer(mesh_types, meshes, mesh_units, rotation_types, contact_faces, contact_points, goal_name='tower_goal')
     if check_meshes:
         visualize(initial_object_list, meshes, _goal_obj=goal_obj)
 
     # mesh_types, mesh_files, mesh_units, meshes, rotation_types, contact_faces, contact_points = get_meshes()
     # initial_object_list, goal_obj, contact_points, contact_faces, coll_mngr, _, _ = \
-    #     configuration_initializer(mesh_types, meshes, rotation_types, contact_faces, contact_points, goal_name='twin_tower_goal')
+    #     configuration_initializer(mesh_types, meshes, mesh_units, rotation_types, contact_faces, contact_points, goal_name='twin_tower_goal')
     # visualize(initial_object_list, meshes, _goal_obj=goal_obj)
     #
     # mesh_types, mesh_files, mesh_units, meshes, rotation_types, contact_faces, contact_points = get_meshes()
     # initial_object_list, goal_obj, contact_points, contact_faces, coll_mngr, _, _ = \
-    #     configuration_initializer(mesh_types, meshes, rotation_types, contact_faces, contact_points, goal_name='box_goal')
+    #     configuration_initializer(mesh_types, meshes, mesh_units, rotation_types, contact_faces, contact_points, goal_name='box_goal')
     # visualize(initial_object_list, meshes, _goal_obj=goal_obj)
     #
     # mesh_types, mesh_files, mesh_units, meshes, rotation_types, contact_faces, contact_points = get_meshes()
     # initial_object_list, goal_obj, contact_points, contact_faces, coll_mngr, _, _ = \
-    #     configuration_initializer(mesh_types, meshes, rotation_types, contact_faces, contact_points, goal_name='stack_easy')
+    #     configuration_initializer(mesh_types, meshes, mesh_units, rotation_types, contact_faces, contact_points, goal_name='stack_easy')
     # visualize(initial_object_list, meshes, _goal_obj=goal_obj)
     #
     # mesh_types, mesh_files, mesh_units, meshes, rotation_types, contact_faces, contact_points = get_meshes()
     # initial_object_list, goal_obj, contact_points, contact_faces, coll_mngr, _, _ = \
-    #     configuration_initializer(mesh_types, meshes, rotation_types, contact_faces, contact_points, goal_name='stack_difficult')
+    #     configuration_initializer(mesh_types, meshes, mesh_units, rotation_types, contact_faces, contact_points, goal_name='stack_difficult')
     # visualize(initial_object_list, meshes, _goal_obj=goal_obj)
 
     action_list = get_possible_actions(initial_object_list, meshes, coll_mngr,

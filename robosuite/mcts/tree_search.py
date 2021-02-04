@@ -369,36 +369,36 @@ from matplotlib import pyplot as plt
 #     return next_object_list, next_left_arm_joint_values, next_left_gripper_width, next_right_arm_joint_values, next_right_gripper_width, planning_results, planned_trajs, planned_gripper_widths
 
 
-# def check_stability(obj_idx, object_list, meshes, mesh1):
-#     if "on" in object_list[obj_idx].logical_state:
-#         obj_name = object_list[obj_idx].logical_state["on"][0]
-#         support_obj_idx = get_obj_idx_by_name(object_list, obj_name)
-#         mesh2 = deepcopy(meshes[object_list[support_obj_idx].mesh_idx])
-#         mesh2.apply_transform(object_list[support_obj_idx].pose)
-#
-#         closest_points, dists, surface_idx = trimesh.proximity.closest_point(mesh2, [mesh1.center_mass])
-#         project_point2 = mesh1.center_mass - closest_points[0]
-#         project_point2 = project_point2 / np.sqrt(np.sum(project_point2 ** 2.))
-#         safe_com = project_point2[2] > np.cos(np.pi / 30.)
-#
-#         if safe_com:
-#             mesh1 = trimesh.util.concatenate([mesh1, mesh2])
-#             return check_stability(support_obj_idx, object_list, meshes, mesh1)
-#         else:
-#             return False
-#     else:
-#         return True
-#
-#
-# def geometry_based_physical_checker(obj_list, action, next_obj_list, meshes, network=None):
-#     if action['type'] is 'pick':
-#         return True
-#     if action['type'] is 'place':
-#         pick_idx = get_held_object(obj_list)
-#         mesh1 = deepcopy(meshes[next_obj_list[pick_idx].mesh_idx])
-#         mesh1.apply_transform(next_obj_list[pick_idx].pose)
-#         flag_ = check_stability(pick_idx, next_obj_list, meshes, mesh1)
-#         return flag_
+def check_stability(obj_idx, object_list, meshes, mesh1):
+    if "on" in object_list[obj_idx].logical_state:
+        obj_name = object_list[obj_idx].logical_state["on"][0]
+        support_obj_idx = get_obj_idx_by_name(object_list, obj_name)
+        mesh2 = deepcopy(meshes[object_list[support_obj_idx].mesh_idx])
+        mesh2.apply_transform(object_list[support_obj_idx].pose)
+
+        closest_points, dists, surface_idx = trimesh.proximity.closest_point(mesh2, [mesh1.center_mass])
+        project_point2 = mesh1.center_mass - closest_points[0]
+        project_point2 = project_point2 / np.sqrt(np.sum(project_point2 ** 2.))
+        safe_com = project_point2[2] > 0.999 and mesh2.face_normals[surface_idx[0]][2] > 0.999
+
+        if safe_com:
+            mesh1 = trimesh.util.concatenate([mesh1, mesh2])
+            return check_stability(support_obj_idx, object_list, meshes, mesh1)
+        else:
+            return False
+    else:
+        return True
+
+
+def geometry_based_physical_checker(obj_list, action, next_obj_list, meshes, network=None):
+    if action['type'] is 'pick':
+        return True
+    if action['type'] is 'place':
+        pick_idx = get_held_object(obj_list)
+        mesh1 = deepcopy(meshes[next_obj_list[pick_idx].mesh_idx])
+        mesh1.apply_transform(next_obj_list[pick_idx].pose)
+        flag_ = check_stability(pick_idx, next_obj_list, meshes, mesh1)
+        return flag_
 #
 #
 # def mujoco_based_physical_checker(obj_list, action, next_obj_list, meshes, network=None):
@@ -424,34 +424,120 @@ from matplotlib import pyplot as plt
 #             return True
 
 
+def sampler(_exploration_method, _action_values, _visits, _depth, _indices=None, eps=0.):
+    if _indices is not None:
+        # print(_action_values[_indices])
+        selected_action_values = [_action_values[_index] for _index in _indices]
+        selected_visits = [_visits[_index] for _index in _indices]
+    else:
+        selected_action_values = deepcopy(_action_values)
+        selected_visits = _visits
+
+    selected_action_values = np.asarray(selected_action_values)
+    selected_action_values[np.isinf(selected_action_values)] = 0.
+
+    # print(_exploration_method)
+    # print(_exploration_method['method'] is 'bai_ucb')
+    if eps > np.random.uniform() or _exploration_method['method'] is 'random':
+        selected_idx = np.random.choice(len(selected_action_values), size=1)[0]
+    elif _exploration_method['method'] is 'ucb':
+        c = _exploration_method['param']/np.maximum(_depth, 1)
+        upper_confidence_bounds = selected_action_values + c*np.sqrt(1./np.maximum(1., selected_visits))
+        selected_idx = np.argmax(upper_confidence_bounds)
+        # print(upper_bounds)
+        # print(lower_bounds)
+        # print(B_k)
+        # print(u,b)
+        # print("===================================")
+    elif _exploration_method['method'] is 'bai_ucb':
+        if len(_visits) == 1:
+            selected_idx = 0
+        else:
+            # print(selected_action_values)
+            # print(selected_visits)
+            c = _exploration_method['param']/np.maximum(_depth, 1)
+            upper_bounds = selected_action_values + c * np.sqrt(1./np.maximum(1., selected_visits))
+            lower_bounds = selected_action_values - c * np.sqrt(1. / np.maximum(1., selected_visits))
+            B_k = [np.max([upper_bounds[i] - lower_bounds[k] for i in range(len(selected_action_values)) if i is not k]) for k in range(len(selected_action_values))]
+            b = np.argmin(B_k)
+            u = np.argmax(upper_bounds)
+            # print(upper_bounds)
+            # print(lower_bounds)
+            # print(B_k)
+            # print(u,b)
+            # print("===================================")
+            if selected_visits[b] > selected_visits[u]:
+                selected_idx = u
+            else:
+                selected_idx = b
+    elif _exploration_method['method'] is 'bai_perturb':
+        if len(_visits) == 1:
+            selected_idx = 0
+        else:
+            # print(selected_action_values)
+            # print(selected_visits)
+            c = _exploration_method['param']/np.maximum(_depth, 1)
+            g = np.random.normal(size=(len(selected_visits)))
+            upper_bounds = selected_action_values + c * np.sqrt(1./np.maximum(1., selected_visits)) * g
+            lower_bounds = selected_action_values - c * np.sqrt(1. / np.maximum(1., selected_visits)) * g
+            B_k = [np.max([upper_bounds[i] - lower_bounds[k] for i in range(len(selected_action_values)) if i is not k]) for k in range(len(selected_action_values))]
+            b = np.argmin(B_k)
+            u = np.argmax(upper_bounds)
+            # print(upper_bounds)
+            # print(lower_bounds)
+            # print(B_k)
+            # print(u,b)
+            # print("===================================")
+            if selected_visits[b] > selected_visits[u]:
+                selected_idx = u
+            else:
+                selected_idx = b
+    if _indices is not None:
+        return _indices[selected_idx]
+    else:
+        return selected_idx
+
+
 class Tree(object):
     def __init__(self,
-                 init_obj_list,
-                 max_depth,
-                 coll_mngr,
-                 meshes,
-                 contact_points,
-                 contact_faces,
-                 rotation_types,
-                 min_visit=1,
-                 goal_obj=None):
+                 _init_obj_list,
+                 _max_depth,
+                 _coll_mngr,
+                 _meshes,
+                 _contact_points,
+                 _contact_faces,
+                 _rotation_types,
+                 _min_visit=1,
+                 _goal_obj=None,
+                 _physcial_constraint_checker=geometry_based_physical_checker,
+                 _exploration=None):
 
         self.Tree = nx.DiGraph()
-        self.max_depth = max_depth
-        self.min_visit = min_visit
+        self.max_depth = _max_depth
+        self.min_visit = _min_visit
         self.Tree.add_node(0)
         self.Tree.update(nodes=[(0, {'depth': 0,
-                                     'state': init_obj_list,
+                                     'state': _init_obj_list,
                                      'reward': 0,
                                      'value': -np.inf,
                                      'visit': 0})])
-        self.coll_mngr = coll_mngr
-        self.meshes = meshes
-        self.contact_points = contact_points
-        self.contact_faces = contact_faces
-        self.rotation_types = rotation_types
+        self.coll_mngr = _coll_mngr
+        self.meshes = _meshes
+        self.contact_points = _contact_points
+        self.contact_faces = _contact_faces
+        self.rotation_types = _rotation_types
 
-        self.goal_obj = goal_obj
+        self.goal_obj = _goal_obj
+        if _goal_obj is None:
+            self.side_place_flag = True
+        else:
+            self.side_place_flag = False
+        self.physcial_constraint_checker = _physcial_constraint_checker
+        self.network = None
+
+        if _exploration is None:
+            _exploration = {'method': 'random'}
+        self.exploration_method = _exploration
 
     def exploration(self, state_node):
         depth = self.Tree.nodes[state_node]['depth']
@@ -460,12 +546,12 @@ class Tree(object):
 
         if depth < self.max_depth:
             obj_list = self.Tree.nodes[state_node]['state']
-            action_nodes = [action_node for action_node in self.Tree.neighbors(state_node)]
+            action_nodes = [action_node for action_node in self.Tree.neighbors(state_node) if self.Tree.nodes[action_node]['reward']==0.]
             if obj_list is None:
                 return 0.0
             elif len(action_nodes) == 0:
                 action_list = get_possible_actions(obj_list, self.meshes, self.coll_mngr,
-                                                   self.contact_points, self.contact_faces, self.rotation_types)
+                                                   self.contact_points, self.contact_faces, self.rotation_types, side_place_flag=self.side_place_flag)
                 if len(action_list) == 0:
                     return 0.0
                 else:
@@ -486,16 +572,26 @@ class Tree(object):
             action_visits = [self.Tree.nodes[action_node]['visit'] for action_node in action_nodes]
             action_list = [self.Tree.nodes[action_node]['action'] for action_node in action_nodes]
 
+            eps = np.maximum(np.minimum(1., 1/np.maximum(visit,1)), 0.01)
             if np.any(['place' in action['type'] for action in action_list]):
-                table_place_indices = [action_idx for action_idx, action in enumerate(action_list) if
-                                       'table' in action['param']]
-                if len(table_place_indices) > 0:
-                    selected_idx = np.random.choice(table_place_indices, size=1)[0]
+                if self.goal_obj is not None :
+                    table_place_indices = [action_idx for action_idx, action in enumerate(action_list) if
+                                           'table' in action['param']]
+                    if len(table_place_indices) > 0:
+                        # selected_idx = table_place_indices[np.random.choice(len(table_place_indices), size=1)[0]]
+                        selected_idx = sampler(self.exploration_method, action_values, action_visits, depth, _indices=table_place_indices, eps=eps)
+                    else:
+                        selected_idx = sampler(self.exploration_method, action_values, action_visits, depth, eps=eps)
                 else:
-                    selected_idx = np.random.choice(len(action_values), size=1)[0]
+                    non_table_place_indices = [action_idx for action_idx, action in enumerate(action_list) if
+                                               'table' not in action['param']]
+                    if len(non_table_place_indices) > 0:
+                        # selected_idx = non_table_place_indices[np.random.choice(len(non_table_place_indices), size=1)[0]]]
+                        selected_idx = sampler(self.exploration_method, action_values, action_visits, depth, _indices=non_table_place_indices, eps=eps)
+                    else:
+                        selected_idx = sampler(self.exploration_method, action_values, action_visits, depth, eps=eps)
             else:
-                selected_idx = np.random.choice(len(action_values), size=1)[0]
-
+                selected_idx = sampler(self.exploration_method, action_values, action_visits, depth, eps=eps)
             selected_action_node = action_nodes[selected_idx]
             selected_action_value = action_values[selected_idx]
             selected_action_value_new = self.action_exploration(selected_action_node)
@@ -517,28 +613,38 @@ class Tree(object):
         next_state_nodes = [node for node in self.Tree.neighbors(action_node)]
         if len(next_state_nodes) == 0:
             next_obj_list = get_transition(obj_list, action)
-            rew = get_reward(obj_list, action, self.goal_obj, next_obj_list, self.meshes)
+            if self.physcial_constraint_checker is not None:
+                physical_demonstratablity = self.physcial_constraint_checker(obj_list, action, next_obj_list, self.meshes, network=self.network)
+            else:
+                physical_demonstratablity = True
 
-            child_node = self.Tree.number_of_nodes()
-            self.Tree.add_node(child_node)
-            self.Tree.update(nodes=[(child_node,
-                                     {'depth': depth + 1,
-                                      'state': next_obj_list,
-                                      'reward': rew,
-                                      'value': -np.inf,
-                                      'visit': 0})])
-            self.Tree.add_edge(action_node, child_node)
+            if physical_demonstratablity:
+                rew = get_reward(obj_list, action, self.goal_obj, next_obj_list, self.meshes)
+
+                child_node = self.Tree.number_of_nodes()
+                self.Tree.add_node(child_node)
+                self.Tree.update(nodes=[(child_node,
+                                         {'depth': depth + 1,
+                                          'state': next_obj_list,
+                                          'reward': rew,
+                                          'value': -np.inf,
+                                          'visit': 0})])
+                self.Tree.add_edge(action_node, child_node)
             next_state_nodes = [node for node in self.Tree.neighbors(action_node)]
-        next_state_node = next_state_nodes[0]
-        next_state_value = self.Tree.nodes[next_state_node]['value']
-        next_state_visit = self.Tree.nodes[next_state_node]['visit']
-        reward = self.Tree.nodes[next_state_node]['reward']
 
-        next_state_value_new = reward + self.exploration(next_state_node)
-        if next_state_value < next_state_value_new:
-            next_state_value = next_state_value_new
-            self.Tree.update(nodes=[(action_node, {'value': next_state_value})])
+        if len(next_state_nodes) > 0:
+            next_state_node = next_state_nodes[0]
+            next_state_value = self.Tree.nodes[next_state_node]['value']
+            next_state_visit = self.Tree.nodes[next_state_node]['visit']
+            reward = self.Tree.nodes[next_state_node]['reward']
 
+            next_state_value_new = reward + self.exploration(next_state_node)
+            if next_state_value < next_state_value_new:
+                next_state_value = next_state_value_new
+        else:
+            next_state_value = -np.inf
+            self.Tree.update(nodes=[(action_node, {'reward': -np.inf})])
+        self.Tree.update(nodes=[(action_node, {'value': next_state_value})])
         return next_state_value
 
     def get_best_path(self, start_node=0):
@@ -604,7 +710,7 @@ if __name__ == '__main__':
     for seed in range(n_seed):
         mcts = Tree(initial_object_list, np.sum(n_obj_per_mesh_types) * 2, coll_mngr, meshes, contact_points,
                     contact_faces, rotation_types,
-                    goal_obj=goal_obj)
+                    _goal_obj=goal_obj)
         best_value_indices = []
         best_value_list = []
         best_final_state_list = []

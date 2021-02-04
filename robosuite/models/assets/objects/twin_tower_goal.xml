@@ -14,8 +14,8 @@
     </body>
   </worldbody>
   <asset>
-    <mesh file="meshes/twin_tower_goal_0.stl" name="twin_tower_goal_0" scale="0.001 0.001 0.001"/>
-    <mesh file="meshes/twin_tower_goal_1.stl" name="twin_tower_goal_1" scale="0.001 0.001 0.001"/>
-    <mesh file="meshes/twin_tower_goal_2.stl" name="twin_tower_goal_2" scale="0.001 0.001 0.001"/>
+    <mesh file="meshes/twin_tower_goal_0.stl" name="twin_tower_goal_0" scale="0.0011 0.0011 0.0011"/>
+    <mesh file="meshes/twin_tower_goal_1.stl" name="twin_tower_goal_1" scale="0.0011 0.0011 0.0011"/>
+    <mesh file="meshes/twin_tower_goal_2.stl" name="twin_tower_goal_2" scale="0.0011 0.0011 0.0011"/>
   </asset>
 </mujoco>

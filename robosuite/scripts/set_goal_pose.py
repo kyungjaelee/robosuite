@@ -1,7 +1,9 @@
+import pickle
+import glfw
+
 from mujoco_py import MjSim, MjViewer
 
 from robosuite.mcts.tree_search import *
-from robosuite.mcts import *
 from robosuite.models.base import MujocoXML
 from robosuite.models.objects import MujocoXMLObject
 from robosuite.utils import transform_utils as T
@@ -15,18 +17,18 @@ def visualize_trimesh(trimesh_data, transforms=np.eye(4, 4), ax=None, color=None
     if ax is None:
         ax = plt.gca(projection='3d')
     if color is None:
-        color = [np.random.uniform(), np.random.uniform(), np.random.uniform(), 0.2]
+        color = [np.random.uniform(), np.random.uniform(), np.random.uniform(), 0.1]
 
     transformed_vertices = (transforms[:3, :3].dot(trimesh_data.vertices.T) + transforms[:3, [3]]).T
 
     ax.plot_trisurf(transformed_vertices[:, 0], transformed_vertices[:, 1], transformed_vertices[:, 2],
                     triangles=trimesh_data.faces,
-                    linewidth=0.2, antialiased=True, color=color, edgecolor='gray')
+                    linewidth=0.2, antialiased=True, color=color, edgecolor=None)
 
-    axes = (0.05 * transforms[:3, :3] + transforms[:3, [3]]).T
-    ax.plot([transforms[0, 3], axes[0, 0]], [transforms[1, 3], axes[0, 1]], [transforms[2, 3], axes[0, 2]], c='r')
-    ax.plot([transforms[0, 3], axes[1, 0]], [transforms[1, 3], axes[1, 1]], [transforms[2, 3], axes[1, 2]], c='g')
-    ax.plot([transforms[0, 3], axes[2, 0]], [transforms[1, 3], axes[2, 1]], [transforms[2, 3], axes[2, 2]], c='b')
+    # axes = (0.05 * transforms[:3, :3] + transforms[:3, [3]]).T
+    # ax.plot([transforms[0, 3], axes[0, 0]], [transforms[1, 3], axes[0, 1]], [transforms[2, 3], axes[0, 2]], c='r')
+    # ax.plot([transforms[0, 3], axes[1, 0]], [transforms[1, 3], axes[1, 1]], [transforms[2, 3], axes[1, 2]], c='g')
+    # ax.plot([transforms[0, 3], axes[2, 0]], [transforms[1, 3], axes[2, 1]], [transforms[2, 3], axes[2, 2]], c='b')
     return ax
 
 
@@ -82,85 +84,136 @@ def do_physical_simulation(_sim, _object_list, _action, _next_object_list, _view
 
 
 if __name__ == "__main__":
-    initial_object_list, meshes, coll_mngr, goal_obj = table_objects_initializer(n_obj_per_mesh_types=[0, 2, 0, 0, 0, 0, 0, 0],random_initial=True)
-    print('Initialize!!!!!!!!!')
-    mcts = Tree(initial_object_list, 4, coll_mngr, meshes,
-                goal_obj=goal_obj, physical_checker=None, min_reeval=1)
-    # mcts = Tree(initial_object_list, 10, coll_mngr, meshes,
-    #             goal_obj=None, physical_checker=None, robot='baxter',
-    #             left_joint_values=left_arm_initial_joint_values,
-    #             left_gripper_width=0.03,
-    #             right_joint_values=right_arm_initial_joint_values,
-    #             right_gripper_width=0.03)
+    # goal_name = 'stack_easy'
+    goal_name = 'twin_tower_goal'
+    # goal_name = 'tower_goal'
+    exploration_list = [{'method': 'random', 'param': 'random'}, {'method': 'ucb', 'param': 1.}, {'method': 'ucb', 'param': 10.}, {'method': 'bai_ucb', 'param': 1.}, {'method': 'bai_ucb', 'param': 10.}]
+    # exploration = {'method': 'random', 'param': 'random'}
+    # exploration = {'method': 'bai_ucb', 'param': 1.}
+    mesh_types, mesh_files, mesh_units, meshes, rotation_types, contact_faces, contact_points = get_meshes()
+    initial_object_list, goal_obj, contact_points, contact_faces, coll_mngr, _, _, n_obj_per_mesh_types = \
+        configuration_initializer(mesh_types, meshes, mesh_units, rotation_types, contact_faces, contact_points,
+                                  goal_name=goal_name)
 
-    print('Planning!!!!!!!!!')
-    n_exp = 30
-    for i in range(n_exp):
-        mcts.exploration(0)
-        print('{}/{} planning is done'.format(i, n_exp))
+    n_seed = 1
+    opt_num = 500
 
-    optimized_path = mcts.get_best_path(0)
-    object_list = mcts.Tree.nodes[optimized_path[-1]]['state']
-    mcts.visualize_tree()
+    for exploration in exploration_list:
 
-    arena_model = MujocoXML(xml_path_completion("arenas/empty_arena.xml"))
+        seed_value_list = []
+        seed_value_indices = []
+        seed_final_state_list = []
+        seed_path_length_list = []
 
-    for obj in initial_object_list:
-        if 'custom_table' in obj.name:
-            table_model = MujocoXML(xml_path_completion("objects/custom_table.xml"))
-            table_pos_arr, table_quat_arr = T.mat2pose(obj.pose)
-            table_body = table_model.worldbody.find("./body[@name='custom_table']")
-            table_body.set("pos", array_to_string(table_pos_arr))
-            table_body.set("quat", array_to_string(table_quat_arr[[3, 0, 1, 2]]))
-            arena_model.merge(table_model)
-        else:
-            if 'arch_box' in obj.name:
-                obj_xml_path = "objects/arch_box.xml"
-            elif 'rect_box' in obj.name:
-                obj_xml_path = "objects/rect_box.xml"
-            elif 'square_box' in obj.name:
-                obj_xml_path = "objects/square_box.xml"
-            elif 'half_cylinder_box' in obj.name:
-                obj_xml_path = "objects/half_cylinder_box.xml"
-            elif 'triangle_box' in obj.name:
-                obj_xml_path = "objects/triangle_box.xml"
+        for seed in range(n_seed):
+            mcts = Tree(initial_object_list, np.sum(n_obj_per_mesh_types) * 2, coll_mngr, meshes, contact_points,
+                        contact_faces, rotation_types,
+                        _goal_obj=goal_obj,
+                        _exploration=exploration)
+            best_value_indices = []
+            best_value_list = []
+            best_final_state_list = []
 
-            mj_obj_model = MujocoXMLObject(xml_path_completion(obj_xml_path), name=obj.name)
+            best_value = -np.inf
+            print('START : {}th seed'.format(seed))
+            for opt_idx in range(opt_num):
+                mcts.exploration(0)
+                if best_value < mcts.Tree.nodes[0]['value']:
+                    best_value = mcts.Tree.nodes[0]['value']
+                    best_value_list.append(best_value)
+                    best_value_indices.append(opt_idx)
 
-            arena_model.merge_asset(mj_obj_model)
-            mj_obj = mj_obj_model.get_collision(site=True)
+                    best_path_indices = mcts.get_best_path()
+                    best_final_state_list.append(mcts.Tree.nodes[best_path_indices[-1]]['state'])
 
-            joint = mj_obj_model.joints[0]
-            mj_obj.append(new_joint(name=obj.name, **joint))
+                    print(opt_idx, best_value)
+                if (opt_idx + 1) % 100 == 0:
+                    print('============={}/{}============='.format(opt_idx, opt_num))
 
-            arena_model.worldbody.append(mj_obj)
-    mj_obj_model = MujocoXML(xml_path_completion("objects/"+goal_obj.name+".xml"))
-    table_body = mj_obj_model.worldbody.find("./body[@name='"+goal_obj.name+"']")
-    table_pos_arr[0] -= 0.2
-    table_pos_arr[2] += 0.211923
-    table_body.set("pos", array_to_string(table_pos_arr))
-    table_body.set("quat", array_to_string(table_quat_arr[[3, 0, 1, 2]]))
-    arena_model.merge(mj_obj_model)
+            optimized_path = mcts.get_best_path()
+            object_list = mcts.Tree.nodes[optimized_path[-1]]['state']
+            ax = None
+            for obj in object_list:
+                ax = visualize_trimesh(meshes[obj.mesh_idx], obj.pose, ax=ax, color=obj.color)
+            if goal_obj is not None:
+                ax = visualize_trimesh(meshes[goal_obj.mesh_idx], goal_obj.pose, ax=ax, color=goal_obj.color)
+            plt.show()
 
-    sim = MjSim(arena_model.get_model())
-    viewer = MjViewer(sim)
+            arena_model = MujocoXML(xml_path_completion("arenas/empty_arena.xml"))
 
-    path_idx = 0
-    while path_idx + 2 <= len(optimized_path):
-        state_node = optimized_path[path_idx]
-        action_node = optimized_path[path_idx + 1]
-        next_state_node = optimized_path[path_idx + 2]
+            for obj in initial_object_list:
+                if 'custom_table' in obj.name:
+                    table_model = MujocoXML(xml_path_completion("objects/custom_table.xml"))
+                    table_pos_arr, table_quat_arr = T.mat2pose(obj.pose)
+                    table_body = table_model.worldbody.find("./body[@name='custom_table']")
+                    table_body.set("pos", array_to_string(table_pos_arr))
+                    table_body.set("quat", array_to_string(table_quat_arr[[3, 0, 1, 2]]))
+                    arena_model.merge(table_model)
+                else:
+                    if 'arch_box' in obj.name:
+                        obj_xml_path = "objects/arch_box.xml"
+                    elif 'rect_box' in obj.name:
+                        obj_xml_path = "objects/rect_box.xml"
+                    elif 'square_box' in obj.name:
+                        obj_xml_path = "objects/square_box.xml"
+                    elif 'half_cylinder_box' in obj.name:
+                        obj_xml_path = "objects/half_cylinder_box.xml"
+                    elif 'triangle_box' in obj.name:
+                        obj_xml_path = "objects/triangle_box.xml"
 
-        object_list = mcts.Tree.nodes[state_node]['state']
-        action = mcts.Tree.nodes[action_node]['action']
-        next_object_list = mcts.Tree.nodes[next_state_node]['state']
+                    mj_obj_model = MujocoXMLObject(xml_path_completion(obj_xml_path), name=obj.name)
 
-        mis_placed_obj_list, sim_object_list = do_physical_simulation(sim, object_list, action,
-                                                                      next_object_list,
-                                                                      _viewer=viewer,
-                                                                      test_horizon=15000)
+                    arena_model.merge_asset(mj_obj_model)
+                    mj_obj = mj_obj_model.get_collision(site=True)
 
-        print(action)
-        for obj in next_object_list:
-            print(obj.name, obj.logical_state)
-        path_idx += 2
+                    joint = mj_obj_model.joints[0]
+                    mj_obj.append(new_joint(name=obj.name, **joint))
+
+                    arena_model.worldbody.append(mj_obj)
+
+            if goal_obj is not None:
+                mj_goal_obj_model = MujocoXML(xml_path_completion("objects/"+goal_obj.name+".xml"))
+                goal_body = mj_goal_obj_model.worldbody.find("./body[@name='"+goal_obj.name+"']")
+                goal_pos_arr, goal_quat_arr = T.mat2pose(goal_obj.pose)
+                goal_body.set("pos", array_to_string(goal_pos_arr))
+                goal_body.set("quat", array_to_string(goal_quat_arr[[3, 0, 1, 2]]))
+                arena_model.merge(mj_goal_obj_model)
+
+            sim = MjSim(arena_model.get_model())
+            viewer = MjViewer(sim)
+
+            path_idx = 0
+            while path_idx + 2 <= len(optimized_path):
+                state_node = optimized_path[path_idx]
+                action_node = optimized_path[path_idx + 1]
+                next_state_node = optimized_path[path_idx + 2]
+
+                object_list = mcts.Tree.nodes[state_node]['state']
+                action = mcts.Tree.nodes[action_node]['action']
+                next_object_list = mcts.Tree.nodes[next_state_node]['state']
+
+                mis_placed_obj_list, sim_object_list = do_physical_simulation(sim, object_list, action,
+                                                                              next_object_list,
+                                                                              _viewer=viewer,
+                                                                              test_horizon=10000)
+
+                print(seed, action['type'], action['param'], path_idx, len(optimized_path))
+                if len(mis_placed_obj_list) > 0:
+                    print('Fail!!')
+                    break
+
+                path_idx += 2
+
+            seed_value_list.append(best_value_list)
+            seed_value_indices.append(best_value_indices)
+            seed_final_state_list.append(best_final_state_list)
+            seed_path_length_list.append(path_idx)
+
+            glfw.destroy_window(viewer.window)
+            del sim, viewer
+
+        # with open('../data/mcts_performance_' + goal_name + '_' + exploration['method'] + '_' + str(exploration['param']) + '.pkl', 'wb') as f:
+        #     pickle.dump({'seed_value_list': seed_value_list,
+        #                  'seed_value_indices': seed_value_indices,
+        #                  'seed_final_state_list': seed_final_state_list,
+        #                  'seed_path_length_list': seed_path_length_list}, f, pickle.HIGHEST_PROTOCOL)

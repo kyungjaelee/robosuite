@@ -18,11 +18,11 @@ if __name__ == '__main__':
     # mesh_units = [0.001, 0.001, 0.001, 0.001, 0.001, 0.01]
     # mesh_types = ['tower_goal']
     # mesh_files = ['/home/kj/robosuite/robosuite/models/assets/objects/']
-    # mesh_types = ['twin_tower_goal']
-    # mesh_files = ['/home/kj/robosuite/robosuite/models/assets/objects/']
-    mesh_types = ['box_goal']
+    mesh_types = ['twin_tower_goal']
     mesh_files = ['/home/kj/robosuite/robosuite/models/assets/objects/']
-    mesh_units = [0.001, 0.001, 0.001, 0.001, 0.001, 0.01]
+    # mesh_types = ['box_goal']
+    # mesh_files = ['/home/kj/robosuite/robosuite/models/assets/objects/']
+    mesh_units = [0.0013]
     n_mesh_types = len(mesh_types)
 
     meshes = []
