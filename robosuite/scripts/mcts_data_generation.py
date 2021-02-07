@@ -84,6 +84,7 @@ if __name__ == "__main__":
             for _ in range(10):
                 mcts.exploration(0)
 
+
             print("Planning")
             optimized_path = mcts.get_best_path(0)
             final_object_list = mcts.Tree.nodes[optimized_path[-1]]['state']
