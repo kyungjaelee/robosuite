@@ -1,16 +1,35 @@
+import math
 from copy import deepcopy
 import numpy as np
 
 import trimesh
 import pyrender
 
-from robosuite.mcts.transforms import *
+try:
+    import rospy
+
+    # ROS Fundamental packages
+    from geometry_msgs.msg import *
+    from sensor_msgs.msg import *
+    from std_msgs.msg import *
+    from shape_msgs.msg import *
+    from control_msgs.msg import *
+
+    # ROS moveit packages
+    from moveit_msgs.srv import *
+    from moveit_msgs.msg import *
+
+    from mujoco_moveit_connector.srv import *
+except ModuleNotFoundError:
+    print("ROS dependency errors. Robot path planning will be unable.")
+
+# from robosuite.mcts.transforms import *
 from robosuite.utils import transform_utils as tf
 
 from matplotlib import pyplot as plt
 
 
-def get_meshes(_mesh_types=None, _mesh_files=None, _mesh_units=None, _area_ths=0.003, _rotation_types=4):
+def get_meshes(_mesh_types=None, _mesh_files=None, _mesh_units=None, _area_ths=0.003, _tbl_area_ths=0.003, _rotation_types=4):
 
     if _mesh_types is None:
         _mesh_types = ['arch_box',
@@ -52,6 +71,13 @@ def get_meshes(_mesh_types=None, _mesh_files=None, _mesh_units=None, _area_ths=0
                 break
 
         if 'table' in mesh_type:
+            while True:
+                indices, = np.where(mesh.area_faces > _tbl_area_ths)
+                if len(indices) > 0:
+                    mesh = mesh.subdivide(indices)
+                else:
+                    break
+
             points = np.mean(mesh.vertices[mesh.faces], axis=1)
             # find top surfaces of the mesh
             faces, = np.where(points[:, 2] == np.max(points, axis=0)[2])
@@ -121,10 +147,6 @@ def update_logical_state(_object_list):
 
 
 def rotation_matrix(axis, theta):
-    """
-    Return the rotation matrix associated with counterclockwise rotation about
-    the given axis by theta radians.
-    """
     axis = np.asarray(axis)
     axis = axis / math.sqrt(np.dot(axis, axis))
     a = math.cos(theta / 2.0)
@@ -166,13 +188,88 @@ def rotation_matrix_from_z_x(z_axis):
     return T
 
 
-def get_grasp_pose():
-    # TO DO
-    return None
+def rotation_matrix_from_y_x(y_axis):
+    x_axis = [1, 0, 0]
+    z_axis = np.cross(x_axis, y_axis)
+    if np.sqrt(np.sum(z_axis ** 2)) > 0.:
+        z_axis = z_axis / np.sqrt(np.sum(z_axis ** 2))
+        x_axis = np.cross(y_axis, z_axis)
+        x_axis = x_axis / np.sqrt(np.sum(x_axis ** 2))
+    else:
+        x_axis = [0, 1, 0]
+        z_axis = np.cross(x_axis, y_axis)
+        if np.sqrt(np.sum(z_axis ** 2)) > 0.:
+            z_axis = z_axis / np.sqrt(np.sum(z_axis ** 2))
+            x_axis = np.cross(y_axis, z_axis)
+            x_axis = x_axis / np.sqrt(np.sum(x_axis ** 2))
+        else:
+            x_axis = [0, 0, 1]
+            z_axis = np.cross(x_axis, y_axis)
+            z_axis = z_axis / np.sqrt(np.sum(z_axis ** 2))
+            x_axis = np.cross(y_axis, z_axis)
+            x_axis = x_axis / np.sqrt(np.sum(x_axis ** 2))
+
+    rot_mtx = np.eye(4)
+    rot_mtx[:3, 0] = x_axis
+    rot_mtx[:3, 1] = y_axis
+    rot_mtx[:3, 2] = z_axis
+
+    return rot_mtx
+
+
+def transform_matrix2pose(pose_mtx):
+    q = tf.mat2quat(pose_mtx)
+    orientation = Quaternion(x=q[0], y=q[1], z=q[2], w=q[3])
+    position = Point(x=pose_mtx[0, 3], y=pose_mtx[1, 3], z=pose_mtx[2, 3])
+    pose = Pose(position, orientation)
+
+    return pose
+
+
+def pose2transform_matrix(pose):
+    orientation = pose.orientation
+    position = pose.position
+
+    q = [orientation.x, orientation.y, orientation.z, orientation.w]
+    pose_mtx = np.eye(4)
+    pose_mtx[:3, :3] = tf.quat2mat(q)
+    pose_mtx[0, 3] = position.x
+    pose_mtx[1, 3] = position.y
+    pose_mtx[2, 3] = position.z
+
+    return pose_mtx
+
+
+def get_grasp_pose(_mesh_idx1, _pnt1, _normal1, _rotation1, _pose1, _meshes):
+    mesh1 = _meshes[_mesh_idx1]
+    locations, index_ray, index_tri = mesh1.ray.intersects_location(
+        ray_origins=[_pnt1 - 1e-5 * _normal1],
+        ray_directions=[-_normal1])
+
+    _pnt2 = locations[0]
+    _pnt_center = (_pnt1 + _pnt2) / 2.
+
+    y_axis = _pnt2 - _pnt1
+    gripper_width = np.sqrt(np.sum(y_axis ** 2))
+    y_axis = y_axis / np.sqrt(np.sum(y_axis ** 2))
+
+    t_grasp = rotation_matrix_from_y_x(y_axis).dot(rotation_matrix([0, 1, 0], _rotation1))
+    t_grasp[:3, 3] = _pnt_center
+
+    t_retreat = deepcopy(t_grasp)
+    approaching_dir = t_retreat[:3, 2]
+    t_retreat[:3, 3] = _pnt_center - 3e-2 * approaching_dir
+    hand_t_grasp = _pose1.dot(t_grasp)
+    hand_t_retreat = _pose1.dot(t_retreat)
+    # if hand_t_grasp[2, 2] < 1e-10:
+    if hand_t_grasp[2, 2] < -0.99:
+        return hand_t_grasp, hand_t_retreat, gripper_width
+    else:
+        return None, None, None
 
 
 def get_on_pose(_name1, _pnt1, _normal1, _rotation1, _pnt2, _normal2, _pose2, _coll_mngr):
-    target_pnt = _pnt1 + 1e-10 * _normal1
+    target_pnt = _pnt1 + 1e-6 * _normal1
     T_target = rotation_matrix_from_z_x(-_normal1).dot(rotation_matrix([0, 0, 1], _rotation1))
     T_target[:3, 3] = target_pnt
 
@@ -202,6 +299,10 @@ def configuration_initializer(_mesh_types, _meshes, _mesh_units, _rotation_types
         n_obj_per_mesh_types = [0, 2, 2, 0, 0, 0, 0, 0, 0, 0]
     elif 'stack_hard' is goal_name:
         n_obj_per_mesh_types = [0, 1, 1, 1, 1, 0, 0, 0, 0, 0]
+    elif 'regular_shapes' is goal_name:
+        n_obj_per_mesh_types = [0, 2, 2, 0, 0, 0, 0, 0, 0, 0]
+    elif 'round_shapes' is goal_name:
+        n_obj_per_mesh_types = [2, 0, 0, 2, 2, 0, 0, 0, 0, 0]
     else:
         assert Exception('goal name is wrong!!!')
 
@@ -210,7 +311,7 @@ def configuration_initializer(_mesh_types, _meshes, _mesh_units, _rotation_types
         table_spawn_bnd_size = 0.1
     else:
         table_spawn_position = [0.4, 0.0]
-        table_spawn_bnd_size = 0.1
+        table_spawn_bnd_size = 0.15
 
     table_name = 'custom_table'
     table_pose = np.array([0.6, 0.0, 0.573077])
@@ -285,7 +386,7 @@ def configuration_initializer(_mesh_types, _meshes, _mesh_units, _rotation_types
             table_contact_normals_world = table_T[:3, :3].dot(table_contact_normals.T).T
             table_contact_indices, = np.where(table_contact_normals_world[:, 2] > 0.)
 
-            done = False
+            pose1_list = []
             for i in new_obj_contact_indices:
                 for j in range(_rotation_types):
                     for k in table_contact_indices:
@@ -298,14 +399,14 @@ def configuration_initializer(_mesh_types, _meshes, _mesh_units, _rotation_types
                         pose1 = get_on_pose(new_obj.name, pnt1, normal1, 2.*np.pi*j/_rotation_types, pnt2, normal2,
                                             table_T, _coll_mngr)
                         if pose1 is not None:
-                            done = True
-                            break
-                    if done:
-                        break
-                if done:
-                    break
-            if done:
-                new_obj.pose = pose1
+                            min_dist1 = np.min([np.sqrt(np.sum(np.square(tmp_obj.pose[:3, 3] - pose1[:3, 3]))) for tmp_obj in _object_list if tmp_obj.name not in new_obj.name])
+                            if min_dist1 > 0.05:
+                                pose1_list.append(pose1)
+            print(new_obj.name, len(pose1_list))
+            if len(pose1_list) > 0:
+                init_pose_idx = np.random.choice(len(pose1_list), 1)[0]
+                new_obj.pose = pose1_list[init_pose_idx]
+                _coll_mngr.set_transform(new_obj.name, new_obj.pose)
             _object_list.append(new_obj)
             update_logical_state(_object_list)
 
@@ -445,10 +546,79 @@ def get_possible_actions(_object_list, _meshes, _coll_mngr, _contact_points, _co
 
     # Check pick
     if all(["held" not in obj.logical_state for obj in _object_list]):
-        for obj in _object_list:
-            if "support" not in obj.logical_state and "static" not in obj.logical_state and \
-                    "done" not in obj.logical_state and "goal" not in obj.name:
-                _action_list.append({"type": "pick", "param": obj.name})
+        for obj1 in _object_list:
+            if "support" not in obj1.logical_state and "static" not in obj1.logical_state and \
+                    "done" not in obj1.logical_state and "goal" not in obj1.name:
+                _action_list.append({"type": "pick", "param": obj1.name})
+
+    # Check place
+    held_obj_idx = get_held_object(_object_list)
+    if held_obj_idx is not None:
+        held_obj = _object_list[held_obj_idx]
+        obj2 = held_obj
+        obj2_mesh_idx = held_obj.mesh_idx
+        obj2_contact_points = _contact_points[obj2_mesh_idx]
+        obj2_contact_normals = _meshes[obj2_mesh_idx].face_normals[_contact_faces[obj2_mesh_idx]]
+
+        obj2_contact_normals_world = obj2.pose[:3, :3].dot(obj2_contact_normals.T).T
+        if side_place_flag:
+            obj2_contact_indices, = np.where(obj2_contact_normals_world[:, 2] < 1e-3)
+        else:
+            obj2_contact_indices, = np.where(obj2_contact_normals_world[:, 2] < 0.)
+
+        for obj1 in _object_list:
+            if "held" not in obj1.logical_state:
+                obj1_mesh_idx = obj1.mesh_idx
+                obj1_contact_points = _contact_points[obj1_mesh_idx]
+                obj1_contact_normals = _meshes[obj1_mesh_idx].face_normals[_contact_faces[obj1_mesh_idx]]
+
+                obj1_contact_normals_world = obj1.pose[:3, :3].dot(obj1_contact_normals.T).T
+                obj1_contact_indices, = np.where(obj1_contact_normals_world[:, 2] > 0.99)
+
+                for i in obj1_contact_indices:
+                    for j in range(_rotation_types):
+                        for k in obj2_contact_indices:
+                            pnt1 = obj1_contact_points[i]
+                            normal1 = obj1_contact_normals[i]
+
+                            pnt2 = obj2_contact_points[k]
+                            normal2 = obj2_contact_normals[k]
+
+                            pose = get_on_pose(obj2.name, pnt2, normal2, 2. * np.pi * j / _rotation_types,
+                                               pnt1, normal1, obj1.pose, _coll_mngr)
+
+                            if pose is not None:
+                                _action_list.append({"type": "place", "param": obj1.name, "placing_pose": pose})
+    return _action_list
+
+
+def get_possible_actions_with_robot(_object_list, _meshes, _coll_mngr, _contact_points, _contact_faces, _rotation_types, side_place_flag=False):
+    _action_list = []
+    for obj in _object_list:
+        _coll_mngr.set_transform(obj.name, obj.pose)
+
+    # Check pick
+    if all(["held" not in obj.logical_state for obj in _object_list]):
+        for obj1 in _object_list:
+            if "support" not in obj1.logical_state and "static" not in obj1.logical_state and \
+                    "done" not in obj1.logical_state and "goal" not in obj1.name:
+                obj1_mesh_idx = obj1.mesh_idx
+                obj1_pose = obj1.pose
+                obj1_contact_points = _contact_points[obj1_mesh_idx]
+                obj1_contact_normals = _meshes[obj1_mesh_idx].face_normals[_contact_faces[obj1_mesh_idx]]
+
+                obj1_contact_normals_world = obj1.pose[:3, :3].dot(obj1_contact_normals.T).T
+                obj1_contact_indices, = np.where(np.abs(obj1_contact_normals_world[:, 2]) < 1e-10)
+
+                for i in obj1_contact_indices:
+                    for j in range(_rotation_types):
+                        pnt1 = obj1_contact_points[i]
+                        normal1 = obj1_contact_normals[i]
+                        hand_t_grasp, hand_t_retreat, gripper_width = get_grasp_pose(obj1_mesh_idx, pnt1, normal1, 2. * np.pi * j / _rotation_types, obj1_pose, _meshes)
+
+                        if hand_t_grasp is not None:
+                            _action_list.append({"type": "pick", "param": obj1.name, "grasp_pose": hand_t_grasp,
+                                                 "retreat_pose": hand_t_retreat, "gripper_width": gripper_width})
 
     # Check place
     held_obj_idx = get_held_object(_object_list)
@@ -558,53 +728,448 @@ def get_reward(_obj_list, _action, _goal_obj, _next_obj_list, _meshes):
             return rew
 
 
+def synchronize_planning_scene(_left_joint_values, _left_gripper_width, _right_joint_values, _right_gripper_width,
+                               _object_list, _meshes, _get_planning_scene_proxy=None, _apply_planning_scene_proxy=None):
+    joint_values = {}
+    joint_values.update(_left_joint_values)
+    joint_values.update(_right_joint_values)
+
+    resp = _get_planning_scene_proxy(GetPlanningSceneRequest())
+    current_scene = resp.scene
+
+    next_scene = deepcopy(current_scene)
+    next_scene.robot_state.joint_state.name = joint_values.keys()
+    next_scene.robot_state.joint_state.position = joint_values.values()
+    next_scene.robot_state.joint_state.velocity = [0] * len(joint_values)
+    next_scene.robot_state.joint_state.effort = [0] * len(joint_values)
+    next_scene.robot_state.is_diff = True
+
+    held_obj_idx = get_held_object(_object_list)
+    if held_obj_idx is None and len(next_scene.robot_state.attached_collision_objects) > 0:
+        for attached_object_idx in range(len(next_scene.robot_state.attached_collision_objects)):
+            next_scene.robot_state.attached_collision_objects[
+                attached_object_idx].object.operation = CollisionObject.REMOVE
+
+    for obj in _object_list:
+        co_idx = None
+        for scene_object_idx in range(len(next_scene.world.collision_objects)):
+            if next_scene.world.collision_objects[scene_object_idx].id in obj.name:
+                co_idx = scene_object_idx
+                break
+
+        if co_idx is None:
+            co = CollisionObject()
+            co.operation = CollisionObject.ADD
+            co.id = obj.name
+            co.header = next_scene.robot_state.joint_state.header
+
+            mesh = Mesh()
+            for face in _meshes[obj.mesh_idx].faces:
+                triangle = MeshTriangle()
+                triangle.vertex_indices = face
+                mesh.triangles.append(triangle)
+
+            for vertex in _meshes[obj.mesh_idx].vertices:
+                point = Point()
+                point.x = vertex[0]
+                point.y = vertex[1]
+                point.z = vertex[2]
+                mesh.vertices.append(point)
+
+            co.meshes = [mesh]
+            obj_pose = transform_matrix2pose(obj.pose)
+            obj_pose.position.z -= 0.93
+            co.mesh_poses = [obj_pose]
+
+            if held_obj_idx is not None and len(next_scene.robot_state.attached_collision_objects) == 0 and \
+                    _object_list[held_obj_idx].name is obj.name:
+                aco = AttachedCollisionObject()
+                aco.link_name = 'left_gripper'
+                aco.object = co
+                next_scene.robot_state.attached_collision_objects.append(aco)
+            elif held_obj_idx is not None and len(next_scene.robot_state.attached_collision_objects) > 0 and \
+                    _object_list[held_obj_idx].name is obj.name:
+                continue
+            else:
+                next_scene.world.collision_objects.append(co)
+
+        else:
+            next_scene.world.collision_objects[co_idx].operation = CollisionObject.MOVE
+            next_scene.world.collision_objects[co_idx].header = next_scene.robot_state.joint_state.header
+            obj_pose = transform_matrix2pose(obj.pose)
+            obj_pose.position.z -= 0.93
+            next_scene.world.collision_objects[co_idx].mesh_poses = [obj_pose]
+
+            if held_obj_idx is not None and len(next_scene.robot_state.attached_collision_objects) == 0 and \
+                    _object_list[held_obj_idx].name in obj.name:
+                aco = AttachedCollisionObject()
+                aco.link_name = 'left_gripper'
+                aco.object = deepcopy(next_scene.world.collision_objects[co_idx])
+                aco.object.operation = CollisionObject.ADD
+                next_scene.robot_state.attached_collision_objects.append(aco)
+                next_scene.world.collision_objects[co_idx].operation = CollisionObject.REMOVE
+
+    next_scene.robot_state.joint_state.name = list(next_scene.robot_state.joint_state.name) \
+                                              + ['l_gripper_l_finger_joint', 'l_gripper_r_finger_joint']
+    next_scene.robot_state.joint_state.position = list(next_scene.robot_state.joint_state.position) \
+                                                  + [np.minimum(0.03, _left_gripper_width),
+                                                     -np.minimum(0.03, _left_gripper_width)]
+
+    next_scene.robot_state.joint_state.name = list(next_scene.robot_state.joint_state.name) \
+                                              + ['r_gripper_l_finger_joint', 'r_gripper_r_finger_joint']
+    next_scene.robot_state.joint_state.position = list(next_scene.robot_state.joint_state.position)  \
+                                                  + [np.minimum(0.03, _right_gripper_width),
+                                                     -np.minimum(0.03, _right_gripper_width)]
+
+    # print("------------World Objects")
+    # for scene_object_idx in range(len(next_scene.world.collision_objects)):
+    #     print(next_scene.world.collision_objects[scene_object_idx].id, next_scene.world.collision_objects[scene_object_idx].operation)
+    # print("------------Attached Objects")
+    # for attached_object_idx in range(len(next_scene.robot_state.attached_collision_objects)):
+    #     print(next_scene.robot_state.attached_collision_objects[attached_object_idx].object.id, next_scene.robot_state.attached_collision_objects[attached_object_idx].object.operation)
+    # print("=================================")
+
+    next_scene.is_diff = True
+    req = ApplyPlanningSceneRequest()
+    req.scene = next_scene
+    resp = _apply_planning_scene_proxy(req)
+    for _ in range(100):
+        rospy.sleep(0.001)
+
+
+def get_transition_with_robot(_object_list,
+                              _left_joint_values, _left_gripper_width,
+                              _right_joint_values, _right_gripper_width,
+                              _action, _meshes,
+                              _get_planning_scene_proxy=None,
+                              _apply_planning_scene_proxy=None,
+                              _planning_with_gripper_pose_proxy=None,
+                              _planning_with_arm_joints_proxy=None,
+                              _compute_fk_proxy=None,
+                              _init_left_joint_values=None,
+                              _init_left_gripper_width=0.03,
+                              _init_right_joint_values=None,
+                              _init_right_gripper_width=0.03):
+
+    if _init_right_joint_values is None:
+        _init_right_joint_values = {'right_w0': -0.6699952259595108,
+                                    'right_w1': 1.030009435085784,
+                                    'right_w2': 0.4999997247485215,
+                                    'right_e0': 1.189968899785275,
+                                    'right_e1': 1.9400238130755056,
+                                    'right_s0': -0.08000397926829805,
+                                    'right_s1': -0.9999781166910306}
+    if _init_left_joint_values is None:
+        _init_left_joint_values = {'left_w0': 0.6699952259595108,
+                                   'left_w1': 1.030009435085784,
+                                   'left_w2': -0.4999997247485215,
+                                   'left_e0': -1.189968899785275,
+                                   'left_e1': 1.9400238130755056,
+                                   'left_s0': -0.08000397926829805,
+                                   'left_s1': -0.9999781166910306}
+
+    synchronize_planning_scene(_left_joint_values, _left_gripper_width, _right_joint_values, _right_gripper_width,
+                               _object_list, _meshes,
+                               _get_planning_scene_proxy=_get_planning_scene_proxy,
+                               _apply_planning_scene_proxy=_apply_planning_scene_proxy)
+
+    _next_object_list = deepcopy(_object_list)
+    planned_traj_list = []
+    if _action["type"] is "pick":
+
+        hand_t_grasp = _action["grasp_pose"]
+        # hand_t_retreat = _action["retreat_pose"]
+        gripper_width = _action["gripper_width"]
+
+        req = MoveitPlanningGripperPoseRequest()
+        req.group_name = "left_arm"
+        req.ntrial = 1
+        req.gripper_pose = transform_matrix2pose(hand_t_grasp)
+        req.gripper_pose.position.z -= 0.93
+        req.gripper_link = "left_gripper"
+        resp = _planning_with_gripper_pose_proxy(req)
+        planning_result = resp.success
+        planned_traj = resp.plan
+
+        if planning_result:
+            print("Planning to grasp succeeds.")
+            planned_traj_list.append(planned_traj)
+            pick_obj_idx = get_obj_idx_by_name(_next_object_list, _action['param'])
+
+            support_obj_idx = get_obj_idx_by_name(_next_object_list, _next_object_list[pick_obj_idx].logical_state["on"][0])
+            _next_object_list[support_obj_idx].logical_state["support"].remove(_next_object_list[pick_obj_idx].name)
+
+            _next_object_list[pick_obj_idx].logical_state.clear()
+            _next_object_list[pick_obj_idx].logical_state["held"] = []
+
+            update_logical_state(_next_object_list)
+
+            _after_grasp_left_joint_values = dict(zip(planned_traj.joint_names, planned_traj.points[-1].positions))
+            synchronize_planning_scene(_after_grasp_left_joint_values, gripper_width, _right_joint_values,
+                                       _right_gripper_width,
+                                       _next_object_list, _meshes,
+                                       _get_planning_scene_proxy=_get_planning_scene_proxy,
+                                       _apply_planning_scene_proxy=_apply_planning_scene_proxy)
+
+            req = MoveitPlanningJointValuesRequest()
+            req.group_name = "left_arm"
+            req.ntrial = 1
+            req.joint_names = list(_init_left_joint_values.keys())
+            req.joint_poses = list(_init_left_joint_values.values())
+
+            resp = _planning_with_arm_joints_proxy(req)
+            retreat_planning_result = resp.success
+            retreat_planned_traj = resp.plan
+
+            if retreat_planning_result:
+                print("Planning to retreat succeeds.")
+                planned_traj_list.append(retreat_planned_traj)
+                _after_retreat_left_joint_values = dict(zip(retreat_planned_traj.joint_names, retreat_planned_traj.points[-1].positions))
+                synchronize_planning_scene(_after_retreat_left_joint_values, gripper_width, _right_joint_values,
+                                           _right_gripper_width,
+                                           _next_object_list, _meshes,
+                                           _get_planning_scene_proxy=_get_planning_scene_proxy,
+                                           _apply_planning_scene_proxy=_apply_planning_scene_proxy)
+
+                resp = _get_planning_scene_proxy(GetPlanningSceneRequest())
+                current_scene = resp.scene
+                rel_obj_pose = current_scene.robot_state.attached_collision_objects[0].object.mesh_poses[0]
+                rel_T = pose2transform_matrix(rel_obj_pose)
+
+                req = GetPositionFKRequest()
+                req.fk_link_names = ['left_gripper']
+                req.header.frame_id = 'world'
+                req.robot_state = current_scene.robot_state
+                resp = _compute_fk_proxy(req)
+
+                gripper_T = pose2transform_matrix(resp.pose_stamped[0].pose)
+                gripper_T[2, 3] += 0.93
+                _next_object_list[pick_obj_idx].pose = gripper_T.dot(rel_T)
+
+                return _next_object_list, _after_retreat_left_joint_values, gripper_width, _right_joint_values, _right_gripper_width, planned_traj_list
+
+    if _action["type"] is "place":
+        held_obj_idx = get_held_object(_next_object_list)
+
+        resp = _get_planning_scene_proxy(GetPlanningSceneRequest())
+        current_scene = resp.scene
+        rel_obj_pose = current_scene.robot_state.attached_collision_objects[0].object.mesh_poses[0]
+        rel_T = pose2transform_matrix(rel_obj_pose)
+
+        place_pose = _action["placing_pose"]
+        gripper_pose = place_pose.dot(np.linalg.inv(rel_T))
+
+        req = MoveitPlanningGripperPoseRequest()
+        req.group_name = "left_arm"
+        req.ntrial = 1
+        req.gripper_pose = transform_matrix2pose(gripper_pose)
+        req.gripper_pose.position.z -= 0.93
+        req.gripper_link = "left_gripper"
+        resp = _planning_with_gripper_pose_proxy(req)
+        planning_result = resp.success
+        planned_traj = resp.plan
+
+        if planning_result:
+            print("Planning to place succeeds.")
+            planned_traj_list.append(planned_traj)
+            _after_place_left_joint_values = dict(zip(planned_traj.joint_names, planned_traj.points[-1].positions))
+
+            _next_object_list[held_obj_idx].pose = place_pose
+            _next_object_list[held_obj_idx].logical_state.clear()
+            _next_object_list[held_obj_idx].logical_state["on"] = [_next_object_list[held_obj_idx].name]
+            _next_object_list[held_obj_idx].logical_state["done"] = []
+            update_logical_state(_next_object_list)
+
+            synchronize_planning_scene(_after_place_left_joint_values, _init_left_gripper_width,
+                                       _right_joint_values,
+                                       _right_gripper_width,
+                                       _next_object_list, _meshes,
+                                       _get_planning_scene_proxy=_get_planning_scene_proxy,
+                                       _apply_planning_scene_proxy=_apply_planning_scene_proxy)
+
+            req = MoveitPlanningJointValuesRequest()
+            req.group_name = "left_arm"
+            req.ntrial = 1
+            req.joint_names = list(_init_left_joint_values.keys())
+            req.joint_poses = list(_init_left_joint_values.values())
+
+            resp = _planning_with_arm_joints_proxy(req)
+            retreat_planning_result = resp.success
+            retreat_planned_traj = resp.plan
+
+            if retreat_planning_result:
+                print("Planning to retreat succeeds.")
+                planned_traj_list.append(retreat_planned_traj)
+                _after_retreat_left_joint_values = dict(zip(retreat_planned_traj.joint_names, retreat_planned_traj.points[-1].positions))
+                synchronize_planning_scene(_after_retreat_left_joint_values, _init_left_gripper_width, _right_joint_values,
+                                           _right_gripper_width,
+                                           _next_object_list, _meshes,
+                                           _get_planning_scene_proxy=_get_planning_scene_proxy,
+                                           _apply_planning_scene_proxy=_apply_planning_scene_proxy)
+                return _next_object_list, _after_retreat_left_joint_values, _init_left_gripper_width, _right_joint_values, _right_gripper_width, planned_traj_list
+        # if planning_result:
+        #     final_robot_state = deepcopy(initial_robot_state)
+        #     final_robot_state.joint_state.name = planned_traj.joint_trajectory.joint_names
+        #     final_robot_state.joint_state.position = planned_traj.joint_trajectory.points[-1].positions
+        #     final_robot_state.is_diff = True
+        #
+        #     after_planning_result, after_planned_traj = planning_with_left_arm_joints(left_arm_initial_joint_values,
+        #                                                                           ntrial=10)
+        #     if after_planning_result:
+        #
+        #     else:
+        #         return None
+        # else:
+        #     return None
+        #
+        # _next_object_list[pick_obj_idx].logical_state.clear()
+        # _next_object_list[pick_obj_idx].logical_state["held"] = []
+        # update_logical_state(_next_object_list)
+    return None, None, None, None, None, None
+
+
 if __name__ == '__main__':
 
-    check_meshes = False
+    planning_without_robot = False
+    check_meshes = True
 
-    mesh_types, mesh_files, mesh_units, meshes, rotation_types, contact_faces, contact_points = get_meshes()
-    initial_object_list, goal_obj, contact_points, contact_faces, coll_mngr, _, _ = \
-        configuration_initializer(mesh_types, meshes, mesh_units, rotation_types, contact_faces, contact_points, goal_name='tower_goal')
-    if check_meshes:
-        visualize(initial_object_list, meshes, _goal_obj=goal_obj)
+    if planning_without_robot:
+        mesh_types, mesh_files, mesh_units, meshes, rotation_types, contact_faces, contact_points = get_meshes()
+        initial_object_list, goal_obj, contact_points, contact_faces, coll_mngr, _, _, _ = \
+            configuration_initializer(mesh_types, meshes, mesh_units, rotation_types, contact_faces, contact_points, goal_name='tower_goal')
+        if check_meshes:
+            visualize(initial_object_list, meshes, _goal_obj=goal_obj)
 
-    # mesh_types, mesh_files, mesh_units, meshes, rotation_types, contact_faces, contact_points = get_meshes()
-    # initial_object_list, goal_obj, contact_points, contact_faces, coll_mngr, _, _ = \
-    #     configuration_initializer(mesh_types, meshes, mesh_units, rotation_types, contact_faces, contact_points, goal_name='twin_tower_goal')
-    # visualize(initial_object_list, meshes, _goal_obj=goal_obj)
-    #
-    # mesh_types, mesh_files, mesh_units, meshes, rotation_types, contact_faces, contact_points = get_meshes()
-    # initial_object_list, goal_obj, contact_points, contact_faces, coll_mngr, _, _ = \
-    #     configuration_initializer(mesh_types, meshes, mesh_units, rotation_types, contact_faces, contact_points, goal_name='box_goal')
-    # visualize(initial_object_list, meshes, _goal_obj=goal_obj)
-    #
-    # mesh_types, mesh_files, mesh_units, meshes, rotation_types, contact_faces, contact_points = get_meshes()
-    # initial_object_list, goal_obj, contact_points, contact_faces, coll_mngr, _, _ = \
-    #     configuration_initializer(mesh_types, meshes, mesh_units, rotation_types, contact_faces, contact_points, goal_name='stack_easy')
-    # visualize(initial_object_list, meshes, _goal_obj=goal_obj)
-    #
-    # mesh_types, mesh_files, mesh_units, meshes, rotation_types, contact_faces, contact_points = get_meshes()
-    # initial_object_list, goal_obj, contact_points, contact_faces, coll_mngr, _, _ = \
-    #     configuration_initializer(mesh_types, meshes, mesh_units, rotation_types, contact_faces, contact_points, goal_name='stack_difficult')
-    # visualize(initial_object_list, meshes, _goal_obj=goal_obj)
+        # mesh_types, mesh_files, mesh_units, meshes, rotation_types, contact_faces, contact_points = get_meshes()
+        # initial_object_list, goal_obj, contact_points, contact_faces, coll_mngr, _, _, _ = \
+        #     configuration_initializer(mesh_types, meshes, rotation_types, contact_faces, contact_points, goal_name='twin_tower_goal')
+        # visualize(initial_object_list, meshes, _goal_obj=goal_obj)
+        #
+        # mesh_types, mesh_files, mesh_units, meshes, rotation_types, contact_faces, contact_points = get_meshes()
+        # initial_object_list, goal_obj, contact_points, contact_faces, coll_mngr, _, _, _ = \
+        #     configuration_initializer(mesh_types, meshes, rotation_types, contact_faces, contact_points, goal_name='box_goal')
+        # visualize(initial_object_list, meshes, _goal_obj=goal_obj)
+        #
+        # mesh_types, mesh_files, mesh_units, meshes, rotation_types, contact_faces, contact_points = get_meshes()
+        # initial_object_list, goal_obj, contact_points, contact_faces, coll_mngr, _, _, _ = \
+        #     configuration_initializer(mesh_types, meshes, rotation_types, contact_faces, contact_points, goal_name='stack_easy')
+        # visualize(initial_object_list, meshes, _goal_obj=goal_obj)
+        #
+        # mesh_types, mesh_files, mesh_units, meshes, rotation_types, contact_faces, contact_points = get_meshes()
+        # initial_object_list, goal_obj, contact_points, contact_faces, coll_mngr, _, _, _ = \
+        #     configuration_initializer(mesh_types, meshes, rotation_types, contact_faces, contact_points, goal_name='stack_difficult')
+        # visualize(initial_object_list, meshes, _goal_obj=goal_obj)
 
-    action_list = get_possible_actions(initial_object_list, meshes, coll_mngr,
-                                       contact_points, contact_faces, rotation_types)
-    print(len(action_list))
-    action = action_list[0]
+        action_list = get_possible_actions(initial_object_list, meshes, coll_mngr,
+                                           contact_points, contact_faces, rotation_types)
+        print(len(action_list))
+        action = action_list[0]
 
-    object_list = get_transition(initial_object_list, action)
-    print(get_reward(initial_object_list, action, goal_obj, object_list, meshes))
-    if check_meshes:
-        visualize(object_list, meshes, _goal_obj=goal_obj)
+        object_list = get_transition(initial_object_list, action)
+        print(get_reward(initial_object_list, action, goal_obj, object_list, meshes))
+        if check_meshes:
+            visualize(object_list, meshes, _goal_obj=goal_obj)
 
-    action_list = get_possible_actions(object_list, meshes, coll_mngr,
-                                       contact_points, contact_faces, rotation_types)
-    print(len(action_list))
-    action = action_list[0]
-    next_object_list = get_transition(object_list, action)
-    print(get_reward(object_list, action, goal_obj, next_object_list, meshes))
-    if check_meshes:
-        visualize(next_object_list, meshes, _goal_obj=goal_obj)
+        action_list = get_possible_actions(object_list, meshes, coll_mngr,
+                                           contact_points, contact_faces, rotation_types)
+        print(len(action_list))
+        action = action_list[0]
+        next_object_list = get_transition(object_list, action)
+        print(get_reward(object_list, action, goal_obj, next_object_list, meshes))
+        if check_meshes:
+            visualize(next_object_list, meshes, _goal_obj=goal_obj)
 
-    get_image(object_list, action, next_object_list, meshes, do_visualize=True)
+        get_image(object_list, action, next_object_list, meshes, do_visualize=True)
+    else:
+        mesh_types, mesh_files, mesh_units, meshes, rotation_types, contact_faces, contact_points = get_meshes()
+        initial_object_list, goal_obj, contact_points, contact_faces, coll_mngr, _, _, _ = \
+            configuration_initializer(mesh_types, meshes, mesh_units, rotation_types, contact_faces, contact_points, goal_name='tower_goal')
+        if check_meshes:
+            visualize(initial_object_list, meshes, _goal_obj=goal_obj)
+
+        # mesh_types, mesh_files, mesh_units, meshes, rotation_types, contact_faces, contact_points = get_meshes()
+        # initial_object_list, goal_obj, contact_points, contact_faces, coll_mngr, _, _, _ = \
+        #     configuration_initializer(mesh_types, meshes, rotation_types, contact_faces, contact_points, goal_name='twin_tower_goal')
+        # visualize(initial_object_list, meshes, _goal_obj=goal_obj)
+        #
+        # mesh_types, mesh_files, mesh_units, meshes, rotation_types, contact_faces, contact_points = get_meshes()
+        # initial_object_list, goal_obj, contact_points, contact_faces, coll_mngr, _, _, _ = \
+        #     configuration_initializer(mesh_types, meshes, rotation_types, contact_faces, contact_points, goal_name='box_goal')
+        # visualize(initial_object_list, meshes, _goal_obj=goal_obj)
+        #
+        # mesh_types, mesh_files, mesh_units, meshes, rotation_types, contact_faces, contact_points = get_meshes()
+        # initial_object_list, goal_obj, contact_points, contact_faces, coll_mngr, _, _, _ = \
+        #     configuration_initializer(mesh_types, meshes, rotation_types, contact_faces, contact_points, goal_name='stack_easy')
+        # visualize(initial_object_list, meshes, _goal_obj=goal_obj)
+        #
+        # mesh_types, mesh_files, mesh_units, meshes, rotation_types, contact_faces, contact_points = get_meshes()
+        # initial_object_list, goal_obj, contact_points, contact_faces, coll_mngr, _, _, _ = \
+        #     configuration_initializer(mesh_types, meshes, rotation_types, contact_faces, contact_points, goal_name='stack_difficult')
+        # visualize(initial_object_list, meshes, _goal_obj=goal_obj)
+
+        initial_left_joint_values = {'left_w0': 0.6699952259595108,
+                                     'left_w1': 1.030009435085784,
+                                     'left_w2': -0.4999997247485215,
+                                     'left_e0': -1.189968899785275,
+                                     'left_e1': 1.9400238130755056,
+                                     'left_s0': -0.08000397926829805,
+                                     'left_s1': -0.9999781166910306}
+        initial_left_gripper_width = 0.03
+        initial_right_joint_values = {'right_w0': -0.6699952259595108,
+                                      'right_w1': 1.030009435085784,
+                                      'right_w2': 0.4999997247485215,
+                                      'right_e0': 1.189968899785275,
+                                      'right_e1': 1.9400238130755056,
+                                      'right_s0': -0.08000397926829805,
+                                      'right_s1': -0.9999781166910306}
+        initial_right_gripper_width = 0.03
+
+        rospy.init_node('mcts_moveit_planner_unit_test', anonymous=True)
+        rospy.wait_for_service('/get_planning_scene')
+        rospy.wait_for_service('/apply_planning_scene')
+        rospy.wait_for_service('/compute_ik')
+        rospy.wait_for_service('/compute_fk')
+
+        get_planning_scene_proxy = rospy.ServiceProxy('/get_planning_scene', GetPlanningScene)
+        apply_planning_scene_proxy = rospy.ServiceProxy('/apply_planning_scene', ApplyPlanningScene)
+        compute_fk_proxy = rospy.ServiceProxy('/compute_fk', GetPositionFK)
+        planning_with_gripper_pose_proxy = rospy.ServiceProxy('/planning_with_gripper_pose', MoveitPlanningGripperPose)
+        planning_with_arm_joints_proxy = rospy.ServiceProxy('/planning_with_arm_joints', MoveitPlanningJointValues)
+
+        action_list = get_possible_actions_with_robot(initial_object_list, meshes, coll_mngr,
+                                           contact_points, contact_faces, rotation_types)
+        print(len(action_list))
+        for action in action_list:
+            object_list, left_joint_values, left_gripper_width, right_joint_values, right_gripper_width, planned_traj_list = \
+                get_transition_with_robot(initial_object_list, initial_left_joint_values, initial_left_gripper_width,
+                                          initial_right_joint_values, initial_right_gripper_width,
+                                          action, meshes,
+                                          _get_planning_scene_proxy=get_planning_scene_proxy,
+                                          _apply_planning_scene_proxy=apply_planning_scene_proxy,
+                                          _compute_fk_proxy=compute_fk_proxy,
+                                          _planning_with_gripper_pose_proxy=planning_with_gripper_pose_proxy,
+                                          _planning_with_arm_joints_proxy=planning_with_arm_joints_proxy)
+            if object_list:
+                break
+
+        print(get_reward(initial_object_list, action, goal_obj, object_list, meshes))
+        if check_meshes:
+            visualize(object_list, meshes, _goal_obj=goal_obj)
+
+        action_list = get_possible_actions_with_robot(object_list, meshes, coll_mngr,
+                                           contact_points, contact_faces, rotation_types)
+        print(len(action_list))
+        for action in action_list:
+            next_object_list, next_left_joint_values, next_left_gripper_width, next_right_joint_values, next_right_gripper_width, next_planned_traj_list = \
+                get_transition_with_robot(object_list, left_joint_values, left_gripper_width, right_joint_values, right_gripper_width,
+                                          action, meshes,
+                                          _get_planning_scene_proxy=get_planning_scene_proxy,
+                                          _apply_planning_scene_proxy=apply_planning_scene_proxy,
+                                          _compute_fk_proxy=compute_fk_proxy,
+                                          _planning_with_gripper_pose_proxy=planning_with_gripper_pose_proxy,
+                                          _planning_with_arm_joints_proxy=planning_with_arm_joints_proxy)
+            if next_object_list:
+                break
+        print(get_reward(object_list, action, goal_obj, next_object_list, meshes))
+        if check_meshes:
+            visualize(next_object_list, meshes, _goal_obj=goal_obj)

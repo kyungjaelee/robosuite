@@ -64,7 +64,9 @@ def do_physical_simulation(_sim, _object_list, _action, _next_object_list, _view
 
 if __name__ == "__main__":
 
-    for dataset_idx in range(300,500):
+    goal_name = 'regular_shapes'
+    mesh_types, mesh_files, mesh_units, meshes, rotation_types, contact_faces, contact_points = get_meshes(_rotation_types=8)
+    for dataset_idx in range(9, 300):
         success_list = []
         configuration_list = []
         action_list = []
@@ -72,18 +74,21 @@ if __name__ == "__main__":
 
         print("{}th experiment started".format(dataset_idx))
         while len(configuration_list) < 1e2:
-            print("Initialize!!!")
-            initial_object_list, meshes, coll_mngr, goal_obj = table_objects_initializer()
-            mcts = Tree(initial_object_list, 6, coll_mngr, meshes)
+            print("Initialization")
+            initial_object_list, goal_obj, contact_points, contact_faces, coll_mngr, _, _, n_obj_per_mesh_types = \
+                configuration_initializer(mesh_types, meshes, mesh_units, rotation_types, contact_faces, contact_points,
+                                          goal_name=goal_name)
+
+            mcts = Tree(initial_object_list, np.sum(n_obj_per_mesh_types) * 2, coll_mngr, meshes, contact_points,
+                        contact_faces, rotation_types, _goal_obj=goal_obj, _physcial_constraint_checker=None)
             for _ in range(10):
                 mcts.exploration(0)
 
-            print("Planning!!!")
+            print("Planning")
             optimized_path = mcts.get_best_path(0)
             final_object_list = mcts.Tree.nodes[optimized_path[-1]]['state']
-            # visualize(final_object_list, meshes)
 
-            print("Do dynamic simulation!!!")
+            print("Do dynamic simulation")
             if len(configuration_list) == 0:
                 arena_model = MujocoXML(xml_path_completion("arenas/empty_arena.xml"))
                 for obj in initial_object_list:
@@ -135,7 +140,7 @@ if __name__ == "__main__":
                 mis_placed_obj_list, sim_object_list = do_physical_simulation(sim, object_list, action,
                                                                               next_object_list,
                                                                               _viewer=viewer,
-                                                                              test_horizon=15000)
+                                                                              test_horizon=30000)
 
                 print(action)
                 if len(mis_placed_obj_list) > 0:
@@ -162,7 +167,7 @@ if __name__ == "__main__":
         del sim, viewer
 
         print("{}th experiment ended".format(dataset_idx))
-        with open('robosuite/data/sim_dynamic_data'+str(dataset_idx)+'.pkl', 'wb') as f:
+        with open('../data/sim_dynamic_data_'+goal_name+'_'+str(dataset_idx)+'.pkl', 'wb') as f:
             pickle.dump({'configuration_list': configuration_list,
                          'success_list': success_list,
                          'action_list': action_list,

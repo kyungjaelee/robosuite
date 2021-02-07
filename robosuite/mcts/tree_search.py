@@ -22,6 +22,8 @@ from networkx.drawing.nx_agraph import graphviz_layout
 # import torch
 
 from matplotlib import pyplot as plt
+
+
 #
 #
 # def transform_matrix2pose(T):
@@ -399,6 +401,8 @@ def geometry_based_physical_checker(obj_list, action, next_obj_list, meshes, net
         mesh1.apply_transform(next_obj_list[pick_idx].pose)
         flag_ = check_stability(pick_idx, next_obj_list, meshes, mesh1)
         return flag_
+
+
 #
 #
 # def mujoco_based_physical_checker(obj_list, action, next_obj_list, meshes, network=None):
@@ -426,7 +430,6 @@ def geometry_based_physical_checker(obj_list, action, next_obj_list, meshes, net
 
 def sampler(_exploration_method, _action_values, _visits, _depth, _indices=None, eps=0.):
     if _indices is not None:
-        # print(_action_values[_indices])
         selected_action_values = [_action_values[_index] for _index in _indices]
         selected_visits = [_visits[_index] for _index in _indices]
     else:
@@ -436,13 +439,11 @@ def sampler(_exploration_method, _action_values, _visits, _depth, _indices=None,
     selected_action_values = np.asarray(selected_action_values)
     selected_action_values[np.isinf(selected_action_values)] = 0.
 
-    # print(_exploration_method)
-    # print(_exploration_method['method'] is 'bai_ucb')
     if eps > np.random.uniform() or _exploration_method['method'] is 'random':
         selected_idx = np.random.choice(len(selected_action_values), size=1)[0]
     elif _exploration_method['method'] is 'ucb':
-        c = _exploration_method['param']/np.maximum(_depth, 1)
-        upper_confidence_bounds = selected_action_values + c*np.sqrt(1./np.maximum(1., selected_visits))
+        c = _exploration_method['param'] / np.maximum(_depth, 1)
+        upper_confidence_bounds = selected_action_values + c * np.sqrt(1. / np.maximum(1., selected_visits))
         selected_idx = np.argmax(upper_confidence_bounds)
         # print(upper_bounds)
         # print(lower_bounds)
@@ -455,8 +456,8 @@ def sampler(_exploration_method, _action_values, _visits, _depth, _indices=None,
         else:
             # print(selected_action_values)
             # print(selected_visits)
-            c = _exploration_method['param']/np.maximum(_depth, 1)
-            upper_bounds = selected_action_values + c * np.sqrt(1./np.maximum(1., selected_visits))
+            c = _exploration_method['param'] / np.maximum(_depth, 1)
+            upper_bounds = selected_action_values + c * np.sqrt(1. / np.maximum(1., selected_visits))
             lower_bounds = selected_action_values - c * np.sqrt(1. / np.maximum(1., selected_visits))
             B_k = [np.max([upper_bounds[i] - lower_bounds[k] for i in range(len(selected_action_values)) if i is not k]) for k in range(len(selected_action_values))]
             b = np.argmin(B_k)
@@ -476,9 +477,9 @@ def sampler(_exploration_method, _action_values, _visits, _depth, _indices=None,
         else:
             # print(selected_action_values)
             # print(selected_visits)
-            c = _exploration_method['param']/np.maximum(_depth, 1)
+            c = _exploration_method['param'] / np.maximum(_depth, 1)
             g = np.random.normal(size=(len(selected_visits)))
-            upper_bounds = selected_action_values + c * np.sqrt(1./np.maximum(1., selected_visits)) * g
+            upper_bounds = selected_action_values + c * np.sqrt(1. / np.maximum(1., selected_visits)) * g
             lower_bounds = selected_action_values - c * np.sqrt(1. / np.maximum(1., selected_visits)) * g
             B_k = [np.max([upper_bounds[i] - lower_bounds[k] for i in range(len(selected_action_values)) if i is not k]) for k in range(len(selected_action_values))]
             b = np.argmin(B_k)
@@ -510,17 +511,55 @@ class Tree(object):
                  _min_visit=1,
                  _goal_obj=None,
                  _physcial_constraint_checker=geometry_based_physical_checker,
-                 _exploration=None):
+                 _exploration=None,
+                 _with_robot=False,
+                 _init_left_joint_values=None,
+                 _init_left_gripper_width=0.03,
+                 _init_right_joint_values=None,
+                 _init_right_gripper_width=0.03,
+                 _get_planning_scene_proxy=None,
+                 _apply_planning_scene_proxy=None,
+                 _compute_fk_proxy=None,
+                 _planning_with_gripper_pose_proxy=None,
+                 _planning_with_arm_joints_proxy=None):
+
+        if _with_robot and _init_left_joint_values is None:
+            _init_left_joint_values = {'left_w0': 0.6699952259595108,
+                                       'left_w1': 1.030009435085784,
+                                       'left_w2': -0.4999997247485215,
+                                       'left_e0': -1.189968899785275,
+                                       'left_e1': 1.9400238130755056,
+                                       'left_s0': -0.08000397926829805,
+                                       'left_s1': -0.9999781166910306}
+        if _with_robot and _init_right_joint_values is None:
+            _init_right_joint_values = {'right_w0': -0.6699952259595108,
+                                        'right_w1': 1.030009435085784,
+                                        'right_w2': 0.4999997247485215,
+                                        'right_e0': 1.189968899785275,
+                                        'right_e1': 1.9400238130755056,
+                                        'right_s0': -0.08000397926829805,
+                                        'right_s1': -0.9999781166910306}
 
         self.Tree = nx.DiGraph()
         self.max_depth = _max_depth
         self.min_visit = _min_visit
         self.Tree.add_node(0)
-        self.Tree.update(nodes=[(0, {'depth': 0,
-                                     'state': _init_obj_list,
-                                     'reward': 0,
-                                     'value': -np.inf,
-                                     'visit': 0})])
+        if _with_robot:
+            self.Tree.update(nodes=[(0, {'depth': 0,
+                                         'state': _init_obj_list,
+                                         'left_joint_values': _init_left_joint_values,
+                                         'left_gripper_width': _init_left_gripper_width,
+                                         'right_joint_values': _init_right_joint_values,
+                                         'right_gripper_width': _init_right_gripper_width,
+                                         'reward': 0,
+                                         'value': -np.inf,
+                                         'visit': 0})])
+        else:
+            self.Tree.update(nodes=[(0, {'depth': 0,
+                                         'state': _init_obj_list,
+                                         'reward': 0,
+                                         'value': -np.inf,
+                                         'visit': 0})])
         self.coll_mngr = _coll_mngr
         self.meshes = _meshes
         self.contact_points = _contact_points
@@ -539,32 +578,66 @@ class Tree(object):
             _exploration = {'method': 'random'}
         self.exploration_method = _exploration
 
+        self.with_robot = _with_robot
+        if self.with_robot:
+            self.init_left_joint_values = _init_left_joint_values
+            self.init_left_gripper_width = _init_left_gripper_width
+            self.init_right_joint_values = _init_right_joint_values
+            self.init_right_gripper_width = _init_right_gripper_width
+            self.get_planning_scene_proxy = _get_planning_scene_proxy
+            self.apply_planning_scene_proxy = _apply_planning_scene_proxy
+            self.compute_fk_proxy = _compute_fk_proxy
+            self.planning_with_gripper_pose_proxy = _planning_with_gripper_pose_proxy
+            self.planning_with_arm_joints_proxy = _planning_with_arm_joints_proxy
+
     def exploration(self, state_node):
         depth = self.Tree.nodes[state_node]['depth']
         visit = self.Tree.nodes[state_node]['visit']
+        if self.with_robot:
+            left_joint_values = self.Tree.nodes[state_node]['left_joint_values']
+            left_gripper_width = self.Tree.nodes[state_node]['left_gripper_width']
+            right_joint_values = self.Tree.nodes[state_node]['right_joint_values']
+            right_gripper_width = self.Tree.nodes[state_node]['right_gripper_width']
         self.Tree.update(nodes=[(state_node, {'visit': visit + 1})])
 
         if depth < self.max_depth:
             obj_list = self.Tree.nodes[state_node]['state']
-            action_nodes = [action_node for action_node in self.Tree.neighbors(state_node) if self.Tree.nodes[action_node]['reward']==0.]
+            action_nodes = [action_node for action_node in self.Tree.neighbors(state_node) if self.Tree.nodes[action_node]['reward'] == 0.]
             if obj_list is None:
                 return 0.0
             elif len(action_nodes) == 0:
-                action_list = get_possible_actions(obj_list, self.meshes, self.coll_mngr,
-                                                   self.contact_points, self.contact_faces, self.rotation_types, side_place_flag=self.side_place_flag)
+                if self.with_robot:
+                    action_list = get_possible_actions_with_robot(obj_list, self.meshes, self.coll_mngr,
+                                                                  self.contact_points, self.contact_faces, self.rotation_types, side_place_flag=self.side_place_flag)
+                else:
+                    action_list = get_possible_actions(obj_list, self.meshes, self.coll_mngr,
+                                                       self.contact_points, self.contact_faces, self.rotation_types, side_place_flag=self.side_place_flag)
                 if len(action_list) == 0:
                     return 0.0
                 else:
                     for action in action_list:
                         child_action_node = self.Tree.number_of_nodes()
                         self.Tree.add_node(child_action_node)
-                        self.Tree.update(nodes=[(child_action_node,
-                                                 {'depth': depth,
-                                                  'state': obj_list,
-                                                  'action': action,
-                                                  'reward': 0.,
-                                                  'value': -np.inf,
-                                                  'visit': 0})])
+                        if self.with_robot:
+                            self.Tree.update(nodes=[(child_action_node,
+                                                     {'depth': depth,
+                                                      'state': obj_list,
+                                                      'left_joint_values': left_joint_values,
+                                                      'left_gripper_width': left_gripper_width,
+                                                      'right_joint_values': right_joint_values,
+                                                      'right_gripper_width': right_gripper_width,
+                                                      'action': action,
+                                                      'reward': 0.,
+                                                      'value': -np.inf,
+                                                      'visit': 0})])
+                        else:
+                            self.Tree.update(nodes=[(child_action_node,
+                                                     {'depth': depth,
+                                                      'state': obj_list,
+                                                      'action': action,
+                                                      'reward': 0.,
+                                                      'value': -np.inf,
+                                                      'visit': 0})])
                         self.Tree.add_edge(state_node, child_action_node)
                     action_nodes = [action_node for action_node in self.Tree.neighbors(state_node)]
 
@@ -572,13 +645,12 @@ class Tree(object):
             action_visits = [self.Tree.nodes[action_node]['visit'] for action_node in action_nodes]
             action_list = [self.Tree.nodes[action_node]['action'] for action_node in action_nodes]
 
-            eps = np.maximum(np.minimum(1., 1/np.maximum(visit,1)), 0.01)
+            eps = np.maximum(np.minimum(1., 1 / np.maximum(visit, 1)), 0.01)
             if np.any(['place' in action['type'] for action in action_list]):
-                if self.goal_obj is not None :
+                if self.goal_obj is not None:
                     table_place_indices = [action_idx for action_idx, action in enumerate(action_list) if
                                            'table' in action['param']]
                     if len(table_place_indices) > 0:
-                        # selected_idx = table_place_indices[np.random.choice(len(table_place_indices), size=1)[0]]
                         selected_idx = sampler(self.exploration_method, action_values, action_visits, depth, _indices=table_place_indices, eps=eps)
                     else:
                         selected_idx = sampler(self.exploration_method, action_values, action_visits, depth, eps=eps)
@@ -586,7 +658,6 @@ class Tree(object):
                     non_table_place_indices = [action_idx for action_idx, action in enumerate(action_list) if
                                                'table' not in action['param']]
                     if len(non_table_place_indices) > 0:
-                        # selected_idx = non_table_place_indices[np.random.choice(len(non_table_place_indices), size=1)[0]]]
                         selected_idx = sampler(self.exploration_method, action_values, action_visits, depth, _indices=non_table_place_indices, eps=eps)
                     else:
                         selected_idx = sampler(self.exploration_method, action_values, action_visits, depth, eps=eps)
@@ -608,28 +679,59 @@ class Tree(object):
         action = self.Tree.nodes[action_node]['action']
         depth = self.Tree.nodes[action_node]['depth']
         visit = self.Tree.nodes[action_node]['visit']
+        if self.with_robot:
+            left_joint_values = self.Tree.nodes[action_node]['left_joint_values']
+            left_gripper_width = self.Tree.nodes[action_node]['left_gripper_width']
+            right_joint_values = self.Tree.nodes[action_node]['right_joint_values']
+            right_gripper_width = self.Tree.nodes[action_node]['right_gripper_width']
         self.Tree.update(nodes=[(action_node, {'visit': visit + 1})])
 
         next_state_nodes = [node for node in self.Tree.neighbors(action_node)]
         if len(next_state_nodes) == 0:
-            next_obj_list = get_transition(obj_list, action)
-            if self.physcial_constraint_checker is not None:
-                physical_demonstratablity = self.physcial_constraint_checker(obj_list, action, next_obj_list, self.meshes, network=self.network)
+            if self.with_robot:
+                next_obj_list, next_left_joint_values, next_left_gripper_width, next_right_joint_values, next_right_gripper_width, planned_traj_list = \
+                    get_transition_with_robot(obj_list, left_joint_values, left_gripper_width,
+                                              right_joint_values, right_gripper_width,
+                                              action, self.meshes,
+                                              _get_planning_scene_proxy=self.get_planning_scene_proxy,
+                                              _apply_planning_scene_proxy=self.apply_planning_scene_proxy,
+                                              _compute_fk_proxy=self.compute_fk_proxy,
+                                              _planning_with_gripper_pose_proxy=self.planning_with_gripper_pose_proxy,
+                                              _planning_with_arm_joints_proxy=self.planning_with_arm_joints_proxy)
             else:
-                physical_demonstratablity = True
+                next_obj_list = get_transition(obj_list, action)
 
-            if physical_demonstratablity:
-                rew = get_reward(obj_list, action, self.goal_obj, next_obj_list, self.meshes)
+            if next_obj_list is not None:
+                if self.physcial_constraint_checker is not None:
+                    physical_demonstratablity = self.physcial_constraint_checker(obj_list, action, next_obj_list, self.meshes, network=self.network)
+                else:
+                    physical_demonstratablity = True
 
-                child_node = self.Tree.number_of_nodes()
-                self.Tree.add_node(child_node)
-                self.Tree.update(nodes=[(child_node,
-                                         {'depth': depth + 1,
-                                          'state': next_obj_list,
-                                          'reward': rew,
-                                          'value': -np.inf,
-                                          'visit': 0})])
-                self.Tree.add_edge(action_node, child_node)
+                if physical_demonstratablity:
+                    rew = get_reward(obj_list, action, self.goal_obj, next_obj_list, self.meshes)
+
+                    child_node = self.Tree.number_of_nodes()
+                    self.Tree.add_node(child_node)
+                    if self.with_robot:
+                        self.Tree.update(nodes=[(child_node,
+                                                 {'depth': depth + 1,
+                                                  'state': next_obj_list,
+                                                  'left_joint_values': next_left_joint_values,
+                                                  'left_gripper_width': next_left_gripper_width,
+                                                  'right_joint_values': next_right_joint_values,
+                                                  'right_gripper_width': next_right_gripper_width,
+                                                  'planned_traj_list': planned_traj_list,
+                                                  'reward': rew,
+                                                  'value': -np.inf,
+                                                  'visit': 0})])
+                    else:
+                        self.Tree.update(nodes=[(child_node,
+                                                 {'depth': depth + 1,
+                                                  'state': next_obj_list,
+                                                  'reward': rew,
+                                                  'value': -np.inf,
+                                                  'visit': 0})])
+                    self.Tree.add_edge(action_node, child_node)
             next_state_nodes = [node for node in self.Tree.neighbors(action_node)]
 
         if len(next_state_nodes) > 0:
@@ -679,26 +781,51 @@ class Tree(object):
 
 
 if __name__ == '__main__':
-    # left_arm_initial_joint_values = {'left_w0': 0.6699952259595108,
-    #                                  'left_w1': 1.030009435085784,
-    #                                  'left_w2': -0.4999997247485215,
-    #                                  'left_e0': -1.189968899785275,
-    #                                  'left_e1': 1.9400238130755056,
-    #                                  'left_s0': -0.08000397926829805,
-    #                                  'left_s1': -0.9999781166910306}
-    #
-    # right_arm_initial_joint_values = {'right_w0': -0.6699952259595108,
-    #                                   'right_w1': 1.030009435085784,
-    #                                   'right_w2': 0.4999997247485215,
-    #                                   'right_e0': 1.189968899785275,
-    #                                   'right_e1': 1.9400238130755056,
-    #                                   'right_s0': -0.08000397926829805,
-    #                                   'right_s1': -0.9999781166910306}
+    with_robot = False
+    if with_robot:
+        initial_left_joint_values = {'left_w0': 0.6699952259595108,
+                                     'left_w1': 1.030009435085784,
+                                     'left_w2': -0.4999997247485215,
+                                     'left_e0': -1.189968899785275,
+                                     'left_e1': 1.9400238130755056,
+                                     'left_s0': -0.08000397926829805,
+                                     'left_s1': -0.9999781166910306}
+        initial_left_gripper_width = 0.03
+        initial_right_joint_values = {'right_w0': -0.6699952259595108,
+                                      'right_w1': 1.030009435085784,
+                                      'right_w2': 0.4999997247485215,
+                                      'right_e0': 1.189968899785275,
+                                      'right_e1': 1.9400238130755056,
+                                      'right_s0': -0.08000397926829805,
+                                      'right_s1': -0.9999781166910306}
+        initial_right_gripper_width = 0.03
 
-    mesh_types, mesh_files, mesh_units, meshes, rotation_types, contact_faces, contact_points = get_meshes()
+        rospy.init_node('mcts_moveit_planner_unit_test', anonymous=True)
+        rospy.wait_for_service('/get_planning_scene')
+        rospy.wait_for_service('/apply_planning_scene')
+        rospy.wait_for_service('/compute_ik')
+        rospy.wait_for_service('/compute_fk')
+
+        get_planning_scene_proxy = rospy.ServiceProxy('/get_planning_scene', GetPlanningScene)
+        apply_planning_scene_proxy = rospy.ServiceProxy('/apply_planning_scene', ApplyPlanningScene)
+        compute_fk_proxy = rospy.ServiceProxy('/compute_fk', GetPositionFK)
+        planning_with_gripper_pose_proxy = rospy.ServiceProxy('/planning_with_gripper_pose', MoveitPlanningGripperPose)
+        planning_with_arm_joints_proxy = rospy.ServiceProxy('/planning_with_arm_joints', MoveitPlanningJointValues)
+
+        area_ths = 1.
+    else:
+        get_planning_scene_proxy = None
+        apply_planning_scene_proxy = None
+        compute_fk_proxy = None
+        planning_with_gripper_pose_proxy = None
+        planning_with_arm_joints_proxy = None
+
+        area_ths = 0.003
+
+    mesh_types, mesh_files, mesh_units, meshes, rotation_types, contact_faces, contact_points = get_meshes(_area_ths=area_ths)
     initial_object_list, goal_obj, contact_points, contact_faces, coll_mngr, _, _, n_obj_per_mesh_types = \
-        configuration_initializer(mesh_types, meshes, rotation_types, contact_faces, contact_points,
-                                  goal_name='tower_goal')
+        configuration_initializer(mesh_types, meshes, mesh_units, rotation_types, contact_faces, contact_points,
+                                  goal_name='stack_easy')
 
     n_seed = 10
     opt_num = 500
@@ -709,8 +836,13 @@ if __name__ == '__main__':
 
     for seed in range(n_seed):
         mcts = Tree(initial_object_list, np.sum(n_obj_per_mesh_types) * 2, coll_mngr, meshes, contact_points,
-                    contact_faces, rotation_types,
-                    _goal_obj=goal_obj)
+                    contact_faces, rotation_types, _goal_obj=goal_obj,
+                    _get_planning_scene_proxy=get_planning_scene_proxy,
+                    _apply_planning_scene_proxy=apply_planning_scene_proxy,
+                    _compute_fk_proxy=compute_fk_proxy,
+                    _planning_with_gripper_pose_proxy=planning_with_gripper_pose_proxy,
+                    _planning_with_arm_joints_proxy=planning_with_arm_joints_proxy,
+                    _with_robot=with_robot)
         best_value_indices = []
         best_value_list = []
         best_final_state_list = []
@@ -720,7 +852,6 @@ if __name__ == '__main__':
         for opt_idx in range(opt_num):
             mcts.exploration(0)
             if best_value < mcts.Tree.nodes[0]['value']:
-
                 best_value = mcts.Tree.nodes[0]['value']
                 best_value_list.append(best_value)
                 best_value_indices.append(opt_idx)
