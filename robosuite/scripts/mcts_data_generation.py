@@ -66,7 +66,7 @@ if __name__ == "__main__":
 
     goal_name = 'regular_shapes'
     mesh_types, mesh_files, mesh_units, meshes, rotation_types, contact_faces, contact_points = get_meshes(_rotation_types=8)
-    for dataset_idx in range(9, 300):
+    for dataset_idx in range(33, 300):
         success_list = []
         configuration_list = []
         action_list = []
@@ -83,7 +83,6 @@ if __name__ == "__main__":
                         contact_faces, rotation_types, _goal_obj=goal_obj, _physcial_constraint_checker=None)
             for _ in range(10):
                 mcts.exploration(0)
-
 
             print("Planning")
             optimized_path = mcts.get_best_path(0)
