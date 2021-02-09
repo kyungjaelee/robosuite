@@ -66,7 +66,7 @@ if __name__ == "__main__":
 
     goal_name = 'regular_shapes'
     mesh_types, mesh_files, mesh_units, meshes, rotation_types, contact_faces, contact_points = get_meshes(_rotation_types=8)
-    for dataset_idx in range(33, 300):
+    for dataset_idx in range(53, 300):
         success_list = []
         configuration_list = []
         action_list = []

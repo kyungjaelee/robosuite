@@ -303,6 +303,8 @@ def configuration_initializer(_mesh_types, _meshes, _mesh_units, _rotation_types
         n_obj_per_mesh_types = [0, 2, 2, 0, 0, 0, 0, 0, 0, 0]
     elif 'round_shapes' is goal_name:
         n_obj_per_mesh_types = [2, 0, 0, 2, 2, 0, 0, 0, 0, 0]
+    elif 'debug_config' is goal_name:
+        n_obj_per_mesh_types = [0, 1, 1, 0, 0, 0, 0, 0, 0, 0]
     else:
         assert Exception('goal name is wrong!!!')
 
@@ -737,29 +739,31 @@ def get_possible_actions_v2(_object_list, _meshes, _coll_mngr, _contact_points, 
 
 
 def get_transition(_object_list, _action):
-    next_object_list = deepcopy(_object_list)
+    _next_object_list = deepcopy(_object_list)
     if _action["type"] is "pick":
-        pick_obj_idx = get_obj_idx_by_name(next_object_list, _action['param'])
-        next_object_list[pick_obj_idx].logical_state.clear()
-        next_object_list[pick_obj_idx].logical_state["held"] = []
-        update_logical_state(next_object_list)
+        pick_obj_idx = get_obj_idx_by_name(_next_object_list, _action['param'])
+
+        support_obj_idx = get_obj_idx_by_name(_next_object_list, _next_object_list[pick_obj_idx].logical_state["on"][0])
+        _next_object_list[support_obj_idx].logical_state["support"].remove(_next_object_list[pick_obj_idx].name)
+
+        _next_object_list[pick_obj_idx].logical_state.clear()
+        _next_object_list[pick_obj_idx].logical_state["held"] = []
+        update_logical_state(_next_object_list)
 
     elif _action["type"] is "place":
-        place_obj_idx = get_obj_idx_by_name(next_object_list, _action['param'])
-        held_obj_idx = get_held_object(next_object_list)
-        support_obj_idx = get_obj_idx_by_name(next_object_list, next_object_list[held_obj_idx].logical_state["on"][0])
+        place_obj_idx = get_obj_idx_by_name(_next_object_list, _action['param'])
+        held_obj_idx = get_held_object(_next_object_list)
         new_pose = _action["placing_pose"]
         if new_pose is None:
             return None
 
-        next_object_list[held_obj_idx].pose = new_pose
-        next_object_list[support_obj_idx].logical_state["support"].remove(next_object_list[held_obj_idx].name)
-        next_object_list[held_obj_idx].logical_state.clear()
-        next_object_list[held_obj_idx].logical_state["on"] = [next_object_list[place_obj_idx].name]
-        next_object_list[held_obj_idx].logical_state["done"] = []
-        update_logical_state(next_object_list)
+        _next_object_list[held_obj_idx].pose = new_pose
+        _next_object_list[held_obj_idx].logical_state.clear()
+        _next_object_list[held_obj_idx].logical_state["on"] = [_next_object_list[place_obj_idx].name]
+        _next_object_list[held_obj_idx].logical_state["done"] = []
+        update_logical_state(_next_object_list)
 
-    return next_object_list
+    return _next_object_list
 
 
 def get_reward(_obj_list, _action, _goal_obj, _next_obj_list, _meshes):
@@ -912,7 +916,7 @@ def synchronize_planning_scene(_left_joint_values, _left_gripper_width, _right_j
         rospy.sleep(0.001)
 
 
-def kinematic_planning(_object_list,
+def kinematic_planning(_object_list, _next_object_list,
                        _left_joint_values, _left_gripper_width,
                        _right_joint_values, _right_gripper_width,
                        _action, _meshes,
@@ -948,7 +952,6 @@ def kinematic_planning(_object_list,
                                _get_planning_scene_proxy=_get_planning_scene_proxy,
                                _apply_planning_scene_proxy=_apply_planning_scene_proxy)
 
-    _next_object_list = deepcopy(_object_list)
     planned_traj_list = []
     if _action["type"] is "pick":
 
@@ -968,16 +971,6 @@ def kinematic_planning(_object_list,
             if planning_result:
                 print("Planning to grasp succeeds.")
                 planned_traj_list.append(planned_traj)
-                pick_obj_idx = get_obj_idx_by_name(_next_object_list, _action['param'])
-
-                support_obj_idx = get_obj_idx_by_name(_next_object_list, _next_object_list[pick_obj_idx].logical_state["on"][0])
-                _next_object_list[support_obj_idx].logical_state["support"].remove(_next_object_list[pick_obj_idx].name)
-
-                _next_object_list[pick_obj_idx].logical_state.clear()
-                _next_object_list[pick_obj_idx].logical_state["held"] = []
-
-                update_logical_state(_next_object_list)
-
                 _after_grasp_left_joint_values = dict(zip(planned_traj.joint_names, planned_traj.points[-1].positions))
                 synchronize_planning_scene(_after_grasp_left_joint_values, gripper_width, _right_joint_values,
                                            _right_gripper_width,
@@ -1018,12 +1011,13 @@ def kinematic_planning(_object_list,
 
                     gripper_T = pose2transform_matrix(resp.pose_stamped[0].pose)
                     gripper_T[2, 3] += 0.93
+                    pick_obj_idx = get_obj_idx_by_name(_object_list, _action['param'])
                     _next_object_list[pick_obj_idx].pose = gripper_T.dot(rel_T)
 
                     return _next_object_list, _after_retreat_left_joint_values, gripper_width, _right_joint_values, _right_gripper_width, planned_traj_list
 
     if _action["type"] is "place":
-        held_obj_idx = get_held_object(_next_object_list)
+        held_obj_idx = get_held_object(_object_list)
 
         resp = _get_planning_scene_proxy(GetPlanningSceneRequest())
         current_scene = resp.scene
@@ -1047,12 +1041,6 @@ def kinematic_planning(_object_list,
             print("Planning to place succeeds.")
             planned_traj_list.append(planned_traj)
             _after_place_left_joint_values = dict(zip(planned_traj.joint_names, planned_traj.points[-1].positions))
-
-            _next_object_list[held_obj_idx].pose = place_pose
-            _next_object_list[held_obj_idx].logical_state.clear()
-            _next_object_list[held_obj_idx].logical_state["on"] = [_next_object_list[held_obj_idx].name]
-            _next_object_list[held_obj_idx].logical_state["done"] = []
-            update_logical_state(_next_object_list)
 
             synchronize_planning_scene(_after_place_left_joint_values, _init_left_gripper_width,
                                        _right_joint_values,

@@ -659,23 +659,39 @@ class Tree(object):
             return [start_node, ] + self.get_best_path(next_node)
 
     def visualize(self):
-        depths = [self.Tree.nodes[n]['depth'] for n in self.Tree.nodes]
-        visits = [self.Tree.nodes[n]['visit'] for n in self.Tree.nodes]
-        rewards = [self.Tree.nodes[n]['reward'] for n in self.Tree.nodes]
-        values = [self.Tree.nodes[n]['value'] for n in self.Tree.nodes]
+        visited_nodes = [n for n in self.Tree.nodes if self.Tree.nodes[n]['visit'] > 0]
+        visited_tree = self.Tree.subgraph(visited_nodes)
+        # depths = [visited_tree.nodes[n]['depth'] for n in visited_tree.nodes]
+        # visits = [visited_tree.nodes[n]['visit'] for n in visited_tree.nodes]
+        # rewards = [visited_tree.nodes[n]['reward'] for n in visited_tree.nodes]
+        # values = [visited_tree.nodes[n]['value'] for n in visited_tree.nodes]
         labels = {
-            n: 'depth:{:d}\nvisit:{:d}\nreward:{:.4f}\nvalue:{:.4f}'.format(depths[n], visits[n], rewards[n], values[n])
-            for n in self.Tree.nodes}
+            n: 'depth:{:d}\nvisit:{:d}\nreward:{:.4f}\nvalue:{:.4f}'.format(visited_tree.nodes[n]['depth'], visited_tree.nodes[n]['visit'], visited_tree.nodes[n]['reward'], visited_tree.nodes[n]['value'])
+            for n in visited_tree.nodes}
 
-        nx.nx_agraph.write_dot(self.Tree, 'test.dot')
+        # nx.nx_agraph.write_dot(self.Tree, 'test.dot')
 
         # same layout using matplotlib with no labels
-        plt.figure(figsize=(16, 32))
+        # plt.figure(figsize=(16, 32))
+        plt.figure()
         plt.title('')
-        nx.nx_agraph.write_dot(self.Tree, 'test.dot')
+        # nx.nx_agraph.write_dot(self.Tree, 'test.dot')
 
-        pos = graphviz_layout(self.Tree, prog='dot')
-        nx.draw(self.Tree, pos, labels=labels, node_shape="s", node_color="none",
+        pos = graphviz_layout(visited_tree, prog='dot')
+        nx.draw(visited_tree, pos, labels=labels, node_shape="s", node_color="none",
+                bbox=dict(facecolor="skyblue", edgecolor='black', boxstyle='round,pad=0.2'))
+        plt.show()
+
+    def visualize_tree(self, visited_tree):
+        labels = {
+            n: 'depth:{:d}\nvisit:{:d}\nreward:{:.4f}\nvalue:{:.4f}'.format(visited_tree.nodes[n]['depth'], visited_tree.nodes[n]['visit'], visited_tree.nodes[n]['reward'], visited_tree.nodes[n]['value'])
+            for n in visited_tree.nodes}
+
+        plt.figure()
+        plt.title('')
+
+        pos = graphviz_layout(visited_tree, prog='dot')
+        nx.draw(visited_tree, pos, labels=labels, node_shape="s", node_color="none",
                 bbox=dict(facecolor="skyblue", edgecolor='black', boxstyle='round,pad=0.2'))
         plt.show()
 
@@ -686,39 +702,64 @@ if __name__ == '__main__':
         configuration_initializer(mesh_types, meshes, mesh_units, rotation_types, contact_faces, contact_points,
                                   goal_name='stack_easy')
 
-    n_seed = 1
-    opt_num = 100
+    # n_seed = 1
+    # opt_num = 100
+    #
+    # seed_value_list = []
+    # seed_value_indices = []
+    # seed_final_state_list = []
+    #
+    # for seed in range(n_seed):
+    #     mcts = Tree(initial_object_list, np.sum(n_obj_per_mesh_types) * 2, coll_mngr, meshes, contact_points,
+    #                 contact_faces, rotation_types, _goal_obj=goal_obj)
+    #     best_value_indices = []
+    #     best_value_list = []
+    #     best_final_state_list = []
+    #
+    #     best_value = -np.inf
+    #     print('START : {}th seed'.format(seed))
+    #     for opt_idx in range(opt_num):
+    #         mcts.exploration(0)
+    #         if best_value < mcts.Tree.nodes[0]['value']:
+    #             best_value = mcts.Tree.nodes[0]['value']
+    #             best_value_list.append(best_value)
+    #             best_value_indices.append(opt_idx)
+    #
+    #             best_path_indices = mcts.get_best_path()
+    #             best_final_state_list.append(mcts.Tree.nodes[best_path_indices[-1]]['state'])
+    #
+    #             print(opt_idx, best_value)
+    #         if (opt_idx + 1) % 100 == 0:
+    #             print('============={}/{}============='.format(opt_idx, opt_num))
+    #
+    #     visualize(best_final_state_list[-1], meshes, _goal_obj=goal_obj)
+    #
+    #     seed_value_list.append(best_value_list)
+    #     seed_value_indices.append(best_value_indices)
+    #     seed_final_state_list.append(best_final_state_list)
+    #     print('DONE : {}th seed'.format(seed))
 
-    seed_value_list = []
-    seed_value_indices = []
-    seed_final_state_list = []
+    mcts = Tree(initial_object_list, np.sum(n_obj_per_mesh_types) * 2, coll_mngr, meshes, contact_points,
+                contact_faces, rotation_types, _goal_obj=goal_obj)
+    for opt_idx in range(30):
+        mcts.exploration(0)
 
-    for seed in range(n_seed):
-        mcts = Tree(initial_object_list, np.sum(n_obj_per_mesh_types) * 2, coll_mngr, meshes, contact_points,
-                    contact_faces, rotation_types, _goal_obj=goal_obj)
-        best_value_indices = []
-        best_value_list = []
-        best_final_state_list = []
+    best_path_indices = mcts.get_best_path(0)
+    best_object_list = mcts.Tree.nodes[best_path_indices[-1]]['state']
+    visualize(best_object_list, meshes, _goal_obj=goal_obj)
+    mcts.visualize()
 
-        best_value = -np.inf
-        print('START : {}th seed'.format(seed))
-        for opt_idx in range(opt_num):
-            mcts.exploration(0)
-            if best_value < mcts.Tree.nodes[0]['value']:
-                best_value = mcts.Tree.nodes[0]['value']
-                best_value_list.append(best_value)
-                best_value_indices.append(opt_idx)
+    visited_nodes = [n for n in mcts.Tree.nodes if mcts.Tree.nodes[n]['depth'] == mcts.max_depth]
+    if len(visited_nodes) == 0:
+        max_depth = np.max([mcts.Tree.nodes[n]['depth'] for n in mcts.Tree.nodes])
+        visited_nodes = [n for n in mcts.Tree.nodes if mcts.Tree.nodes[n]['depth'] == max_depth]
 
-                best_path_indices = mcts.get_best_path()
-                best_final_state_list.append(mcts.Tree.nodes[best_path_indices[-1]]['state'])
+    children_nodes = visited_nodes
+    while len(children_nodes) > 0:
+        parent_nodes = [parent for child in children_nodes for parent in mcts.Tree.predecessors(child)]
+        visited_nodes += parent_nodes
+        children_nodes = parent_nodes
 
-                print(opt_idx, best_value)
-            if (opt_idx + 1) % 100 == 0:
-                print('============={}/{}============='.format(opt_idx, opt_num))
-
-        visualize(best_final_state_list[-1], meshes, _goal_obj=goal_obj)
-
-        seed_value_list.append(best_value_list)
-        seed_value_indices.append(best_value_indices)
-        seed_final_state_list.append(best_final_state_list)
-        print('DONE : {}th seed'.format(seed))
+    visited_nodes = np.unique(visited_nodes)
+    level_1_tree = mcts.Tree.subgraph(visited_nodes)
+    mcts.visualize_tree(level_1_tree)
