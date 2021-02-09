@@ -661,6 +661,81 @@ def get_possible_actions_with_robot(_object_list, _meshes, _coll_mngr, _contact_
     return _action_list
 
 
+def get_possible_actions_v2(_object_list, _meshes, _coll_mngr, _contact_points, _contact_faces, _rotation_types, side_place_flag=False):
+    _action_list = []
+    for obj in _object_list:
+        _coll_mngr.set_transform(obj.name, obj.pose)
+
+    # Check pick
+    if all(["held" not in obj.logical_state for obj in _object_list]):
+        for obj1 in _object_list:
+            if "support" not in obj1.logical_state and "static" not in obj1.logical_state and \
+                    "done" not in obj1.logical_state and "goal" not in obj1.name:
+                obj1_mesh_idx = obj1.mesh_idx
+                obj1_pose = obj1.pose
+                obj1_contact_points = _contact_points[obj1_mesh_idx]
+                obj1_contact_normals = _meshes[obj1_mesh_idx].face_normals[_contact_faces[obj1_mesh_idx]]
+
+                obj1_contact_normals_world = obj1.pose[:3, :3].dot(obj1_contact_normals.T).T
+                obj1_contact_indices, = np.where(np.abs(obj1_contact_normals_world[:, 2]) < 1e-10)
+
+                grasp_poses = []
+                retreat_poses = []
+                gripper_widths = []
+                for i in obj1_contact_indices:
+                    for j in range(_rotation_types):
+                        pnt1 = obj1_contact_points[i]
+                        normal1 = obj1_contact_normals[i]
+                        hand_t_grasp, hand_t_retreat, gripper_width = get_grasp_pose(obj1_mesh_idx, pnt1, normal1, 2. * np.pi * j / _rotation_types, obj1_pose, _meshes)
+
+                        if hand_t_grasp is not None:
+                            grasp_poses.append(hand_t_grasp)
+                            retreat_poses.append(hand_t_retreat)
+                            gripper_widths.append(gripper_width)
+                _action_list.append({"type": "pick", "param": obj1.name, "grasp_poses": grasp_poses,
+                                     "retreat_poses": retreat_poses, "gripper_widths": gripper_widths})
+
+    # Check place
+    held_obj_idx = get_held_object(_object_list)
+    if held_obj_idx is not None:
+        held_obj = _object_list[held_obj_idx]
+        obj2 = held_obj
+        obj2_mesh_idx = held_obj.mesh_idx
+        obj2_contact_points = _contact_points[obj2_mesh_idx]
+        obj2_contact_normals = _meshes[obj2_mesh_idx].face_normals[_contact_faces[obj2_mesh_idx]]
+
+        obj2_contact_normals_world = obj2.pose[:3, :3].dot(obj2_contact_normals.T).T
+        if side_place_flag:
+            obj2_contact_indices, = np.where(obj2_contact_normals_world[:, 2] < 1e-3)
+        else:
+            obj2_contact_indices, = np.where(obj2_contact_normals_world[:, 2] < 0.)
+
+        for obj1 in _object_list:
+            if "held" not in obj1.logical_state:
+                obj1_mesh_idx = obj1.mesh_idx
+                obj1_contact_points = _contact_points[obj1_mesh_idx]
+                obj1_contact_normals = _meshes[obj1_mesh_idx].face_normals[_contact_faces[obj1_mesh_idx]]
+
+                obj1_contact_normals_world = obj1.pose[:3, :3].dot(obj1_contact_normals.T).T
+                obj1_contact_indices, = np.where(obj1_contact_normals_world[:, 2] > 0.99)
+
+                for i in obj1_contact_indices:
+                    for j in range(_rotation_types):
+                        for k in obj2_contact_indices:
+                            pnt1 = obj1_contact_points[i]
+                            normal1 = obj1_contact_normals[i]
+
+                            pnt2 = obj2_contact_points[k]
+                            normal2 = obj2_contact_normals[k]
+
+                            pose = get_on_pose(obj2.name, pnt2, normal2, 2. * np.pi * j / _rotation_types,
+                                               pnt1, normal1, obj1.pose, _coll_mngr)
+
+                            if pose is not None:
+                                _action_list.append({"type": "place", "param": obj1.name, "placing_pose": pose})
+    return _action_list
+
+
 def get_transition(_object_list, _action):
     next_object_list = deepcopy(_object_list)
     if _action["type"] is "pick":
@@ -837,6 +912,178 @@ def synchronize_planning_scene(_left_joint_values, _left_gripper_width, _right_j
         rospy.sleep(0.001)
 
 
+def kinematic_planning(_object_list,
+                       _left_joint_values, _left_gripper_width,
+                       _right_joint_values, _right_gripper_width,
+                       _action, _meshes,
+                       _get_planning_scene_proxy=None,
+                       _apply_planning_scene_proxy=None,
+                       _planning_with_gripper_pose_proxy=None,
+                       _planning_with_arm_joints_proxy=None,
+                       _compute_fk_proxy=None,
+                       _init_left_joint_values=None,
+                       _init_left_gripper_width=0.03,
+                       _init_right_joint_values=None,
+                       _init_right_gripper_width=0.03):
+
+    if _init_right_joint_values is None:
+        _init_right_joint_values = {'right_w0': -0.6699952259595108,
+                                    'right_w1': 1.030009435085784,
+                                    'right_w2': 0.4999997247485215,
+                                    'right_e0': 1.189968899785275,
+                                    'right_e1': 1.9400238130755056,
+                                    'right_s0': -0.08000397926829805,
+                                    'right_s1': -0.9999781166910306}
+    if _init_left_joint_values is None:
+        _init_left_joint_values = {'left_w0': 0.6699952259595108,
+                                   'left_w1': 1.030009435085784,
+                                   'left_w2': -0.4999997247485215,
+                                   'left_e0': -1.189968899785275,
+                                   'left_e1': 1.9400238130755056,
+                                   'left_s0': -0.08000397926829805,
+                                   'left_s1': -0.9999781166910306}
+
+    synchronize_planning_scene(_left_joint_values, _left_gripper_width, _right_joint_values, _right_gripper_width,
+                               _object_list, _meshes,
+                               _get_planning_scene_proxy=_get_planning_scene_proxy,
+                               _apply_planning_scene_proxy=_apply_planning_scene_proxy)
+
+    _next_object_list = deepcopy(_object_list)
+    planned_traj_list = []
+    if _action["type"] is "pick":
+
+        grasp_poses = _action["grasp_poses"]
+        gripper_widths = _action["gripper_widths"]
+        for hand_t_grasp, gripper_width in zip(grasp_poses, gripper_widths):
+            req = MoveitPlanningGripperPoseRequest()
+            req.group_name = "left_arm"
+            req.ntrial = 1
+            req.gripper_pose = transform_matrix2pose(hand_t_grasp)
+            req.gripper_pose.position.z -= 0.93
+            req.gripper_link = "left_gripper"
+            resp = _planning_with_gripper_pose_proxy(req)
+            planning_result = resp.success
+            planned_traj = resp.plan
+
+            if planning_result:
+                print("Planning to grasp succeeds.")
+                planned_traj_list.append(planned_traj)
+                pick_obj_idx = get_obj_idx_by_name(_next_object_list, _action['param'])
+
+                support_obj_idx = get_obj_idx_by_name(_next_object_list, _next_object_list[pick_obj_idx].logical_state["on"][0])
+                _next_object_list[support_obj_idx].logical_state["support"].remove(_next_object_list[pick_obj_idx].name)
+
+                _next_object_list[pick_obj_idx].logical_state.clear()
+                _next_object_list[pick_obj_idx].logical_state["held"] = []
+
+                update_logical_state(_next_object_list)
+
+                _after_grasp_left_joint_values = dict(zip(planned_traj.joint_names, planned_traj.points[-1].positions))
+                synchronize_planning_scene(_after_grasp_left_joint_values, gripper_width, _right_joint_values,
+                                           _right_gripper_width,
+                                           _next_object_list, _meshes,
+                                           _get_planning_scene_proxy=_get_planning_scene_proxy,
+                                           _apply_planning_scene_proxy=_apply_planning_scene_proxy)
+
+                req = MoveitPlanningJointValuesRequest()
+                req.group_name = "left_arm"
+                req.ntrial = 1
+                req.joint_names = list(_init_left_joint_values.keys())
+                req.joint_poses = list(_init_left_joint_values.values())
+
+                resp = _planning_with_arm_joints_proxy(req)
+                retreat_planning_result = resp.success
+                retreat_planned_traj = resp.plan
+
+                if retreat_planning_result:
+                    print("Planning to retreat succeeds.")
+                    planned_traj_list.append(retreat_planned_traj)
+                    _after_retreat_left_joint_values = dict(zip(retreat_planned_traj.joint_names, retreat_planned_traj.points[-1].positions))
+                    synchronize_planning_scene(_after_retreat_left_joint_values, gripper_width, _right_joint_values,
+                                               _right_gripper_width,
+                                               _next_object_list, _meshes,
+                                               _get_planning_scene_proxy=_get_planning_scene_proxy,
+                                               _apply_planning_scene_proxy=_apply_planning_scene_proxy)
+
+                    resp = _get_planning_scene_proxy(GetPlanningSceneRequest())
+                    current_scene = resp.scene
+                    rel_obj_pose = current_scene.robot_state.attached_collision_objects[0].object.mesh_poses[0]
+                    rel_T = pose2transform_matrix(rel_obj_pose)
+
+                    req = GetPositionFKRequest()
+                    req.fk_link_names = ['left_gripper']
+                    req.header.frame_id = 'world'
+                    req.robot_state = current_scene.robot_state
+                    resp = _compute_fk_proxy(req)
+
+                    gripper_T = pose2transform_matrix(resp.pose_stamped[0].pose)
+                    gripper_T[2, 3] += 0.93
+                    _next_object_list[pick_obj_idx].pose = gripper_T.dot(rel_T)
+
+                    return _next_object_list, _after_retreat_left_joint_values, gripper_width, _right_joint_values, _right_gripper_width, planned_traj_list
+
+    if _action["type"] is "place":
+        held_obj_idx = get_held_object(_next_object_list)
+
+        resp = _get_planning_scene_proxy(GetPlanningSceneRequest())
+        current_scene = resp.scene
+        rel_obj_pose = current_scene.robot_state.attached_collision_objects[0].object.mesh_poses[0]
+        rel_T = pose2transform_matrix(rel_obj_pose)
+
+        place_pose = _action["placing_pose"]
+        gripper_pose = place_pose.dot(np.linalg.inv(rel_T))
+
+        req = MoveitPlanningGripperPoseRequest()
+        req.group_name = "left_arm"
+        req.ntrial = 1
+        req.gripper_pose = transform_matrix2pose(gripper_pose)
+        req.gripper_pose.position.z -= 0.93
+        req.gripper_link = "left_gripper"
+        resp = _planning_with_gripper_pose_proxy(req)
+        planning_result = resp.success
+        planned_traj = resp.plan
+
+        if planning_result:
+            print("Planning to place succeeds.")
+            planned_traj_list.append(planned_traj)
+            _after_place_left_joint_values = dict(zip(planned_traj.joint_names, planned_traj.points[-1].positions))
+
+            _next_object_list[held_obj_idx].pose = place_pose
+            _next_object_list[held_obj_idx].logical_state.clear()
+            _next_object_list[held_obj_idx].logical_state["on"] = [_next_object_list[held_obj_idx].name]
+            _next_object_list[held_obj_idx].logical_state["done"] = []
+            update_logical_state(_next_object_list)
+
+            synchronize_planning_scene(_after_place_left_joint_values, _init_left_gripper_width,
+                                       _right_joint_values,
+                                       _right_gripper_width,
+                                       _next_object_list, _meshes,
+                                       _get_planning_scene_proxy=_get_planning_scene_proxy,
+                                       _apply_planning_scene_proxy=_apply_planning_scene_proxy)
+
+            req = MoveitPlanningJointValuesRequest()
+            req.group_name = "left_arm"
+            req.ntrial = 1
+            req.joint_names = list(_init_left_joint_values.keys())
+            req.joint_poses = list(_init_left_joint_values.values())
+
+            resp = _planning_with_arm_joints_proxy(req)
+            retreat_planning_result = resp.success
+            retreat_planned_traj = resp.plan
+
+            if retreat_planning_result:
+                print("Planning to retreat succeeds.")
+                planned_traj_list.append(retreat_planned_traj)
+                _after_retreat_left_joint_values = dict(zip(retreat_planned_traj.joint_names, retreat_planned_traj.points[-1].positions))
+                synchronize_planning_scene(_after_retreat_left_joint_values, _init_left_gripper_width, _right_joint_values,
+                                           _right_gripper_width,
+                                           _next_object_list, _meshes,
+                                           _get_planning_scene_proxy=_get_planning_scene_proxy,
+                                           _apply_planning_scene_proxy=_apply_planning_scene_proxy)
+                return _next_object_list, _after_retreat_left_joint_values, _init_left_gripper_width, _right_joint_values, _right_gripper_width, planned_traj_list
+    return None, None, None, None, None, None
+
+
 def get_transition_with_robot(_object_list,
                               _left_joint_values, _left_gripper_width,
                               _right_joint_values, _right_gripper_width,
@@ -1007,24 +1254,6 @@ def get_transition_with_robot(_object_list,
                                            _get_planning_scene_proxy=_get_planning_scene_proxy,
                                            _apply_planning_scene_proxy=_apply_planning_scene_proxy)
                 return _next_object_list, _after_retreat_left_joint_values, _init_left_gripper_width, _right_joint_values, _right_gripper_width, planned_traj_list
-        # if planning_result:
-        #     final_robot_state = deepcopy(initial_robot_state)
-        #     final_robot_state.joint_state.name = planned_traj.joint_trajectory.joint_names
-        #     final_robot_state.joint_state.position = planned_traj.joint_trajectory.points[-1].positions
-        #     final_robot_state.is_diff = True
-        #
-        #     after_planning_result, after_planned_traj = planning_with_left_arm_joints(left_arm_initial_joint_values,
-        #                                                                           ntrial=10)
-        #     if after_planning_result:
-        #
-        #     else:
-        #         return None
-        # else:
-        #     return None
-        #
-        # _next_object_list[pick_obj_idx].logical_state.clear()
-        # _next_object_list[pick_obj_idx].logical_state["held"] = []
-        # update_logical_state(_next_object_list)
     return None, None, None, None, None, None
 
 
