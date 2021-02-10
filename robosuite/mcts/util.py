@@ -694,7 +694,7 @@ def get_possible_actions_v2(_object_list, _meshes, _coll_mngr, _contact_points, 
                             grasp_poses.append(hand_t_grasp)
                             retreat_poses.append(hand_t_retreat)
                             gripper_widths.append(gripper_width)
-                _action_list.append({"type": "pick", "param": obj1.name, "grasp_poses": grasp_poses,
+                _action_list.append({"type": "pick", "param": obj1.name, "search_idx": 0, "grasp_poses": grasp_poses,
                                      "retreat_poses": retreat_poses, "gripper_widths": gripper_widths})
 
     # Check place
@@ -954,10 +954,11 @@ def kinematic_planning(_object_list, _next_object_list,
 
     planned_traj_list = []
     if _action["type"] is "pick":
+        search_idx = _action["search_idx"]
+        if search_idx < len(_action["grasp_poses"]):
+            hand_t_grasp = _action["grasp_poses"][search_idx]
+            gripper_width = _action["gripper_widths"][search_idx]
 
-        grasp_poses = _action["grasp_poses"]
-        gripper_widths = _action["gripper_widths"]
-        for hand_t_grasp, gripper_width in zip(grasp_poses, gripper_widths):
             req = MoveitPlanningGripperPoseRequest()
             req.group_name = "left_arm"
             req.ntrial = 1

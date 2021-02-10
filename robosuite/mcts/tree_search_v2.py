@@ -511,14 +511,46 @@ class Tree(object):
                  _min_visit=1,
                  _goal_obj=None,
                  _physcial_constraint_checker=geometry_based_physical_checker,
-                 _exploration=None):
+                 _exploration=None,
+                 _init_left_joint_values=None,
+                 _init_left_gripper_width=0.03,
+                 _init_right_joint_values=None,
+                 _init_right_gripper_width=0.03,
+                 _get_planning_scene_proxy=None,
+                 _apply_planning_scene_proxy=None,
+                 _compute_fk_proxy=None,
+                 _planning_with_gripper_pose_proxy=None,
+                 _planning_with_arm_joints_proxy=None):
+
+        if _init_left_joint_values is None:
+            _init_left_joint_values = {'left_w0': 0.6699952259595108,
+                                       'left_w1': 1.030009435085784,
+                                       'left_w2': -0.4999997247485215,
+                                       'left_e0': -1.189968899785275,
+                                       'left_e1': 1.9400238130755056,
+                                       'left_s0': -0.08000397926829805,
+                                       'left_s1': -0.9999781166910306}
+        if _init_right_joint_values is None:
+            _init_right_joint_values = {'right_w0': -0.6699952259595108,
+                                        'right_w1': 1.030009435085784,
+                                        'right_w2': 0.4999997247485215,
+                                        'right_e0': 1.189968899785275,
+                                        'right_e1': 1.9400238130755056,
+                                        'right_s0': -0.08000397926829805,
+                                        'right_s1': -0.9999781166910306}
 
         self.Tree = nx.DiGraph()
+        self.KinematicTree = None
+
         self.max_depth = _max_depth
         self.min_visit = _min_visit
         self.Tree.add_node(0)
         self.Tree.update(nodes=[(0, {'depth': 0,
                                      'state': _init_obj_list,
+                                     'left_joint_values': _init_left_joint_values,
+                                     'left_gripper_width': _init_left_gripper_width,
+                                     'right_joint_values': _init_right_joint_values,
+                                     'right_gripper_width': _init_right_gripper_width,
                                      'reward': 0,
                                      'value': -np.inf,
                                      'visit': 0})])
@@ -541,6 +573,16 @@ class Tree(object):
             _exploration = {'method': 'random'}
         self.exploration_method = _exploration
 
+        self.init_left_joint_values = _init_left_joint_values
+        self.init_left_gripper_width = _init_left_gripper_width
+        self.init_right_joint_values = _init_right_joint_values
+        self.init_right_gripper_width = _init_right_gripper_width
+        self.get_planning_scene_proxy = _get_planning_scene_proxy
+        self.apply_planning_scene_proxy = _apply_planning_scene_proxy
+        self.compute_fk_proxy = _compute_fk_proxy
+        self.planning_with_gripper_pose_proxy = _planning_with_gripper_pose_proxy
+        self.planning_with_arm_joints_proxy = _planning_with_arm_joints_proxy
+
     def exploration(self, state_node):
         depth = self.Tree.nodes[state_node]['depth']
         visit = self.Tree.nodes[state_node]['visit']
@@ -552,7 +594,7 @@ class Tree(object):
             if obj_list is None:
                 return 0.0
             elif len(action_nodes) == 0:
-                action_list = get_possible_actions(obj_list, self.meshes, self.coll_mngr,
+                action_list = get_possible_actions_v2(obj_list, self.meshes, self.coll_mngr,
                                                    self.contact_points, self.contact_faces, self.rotation_types, side_place_flag=self.side_place_flag)
                 if len(action_list) == 0:
                     return 0.0
@@ -649,6 +691,99 @@ class Tree(object):
         self.Tree.update(nodes=[(action_node, {'value': next_state_value})])
         return next_state_value
 
+    def update_subtree(self):
+        _visited_nodes = [n for n in self.Tree.nodes if self.Tree.nodes[n]['depth'] == mcts.max_depth]
+        if len(_visited_nodes) == 0:
+            _max_depth = np.max([self.Tree.nodes[n]['depth'] for n in self.Tree.nodes])
+            _visited_nodes = [n for n in self.Tree.nodes if self.Tree.nodes[n]['depth'] == _max_depth]
+
+        _children_nodes = _visited_nodes
+        while len(_children_nodes) > 0:
+            _parent_nodes = [parent for child in _children_nodes for parent in self.Tree.predecessors(child)]
+            _visited_nodes += _parent_nodes
+            _children_nodes = _parent_nodes
+
+        _visited_nodes = np.unique(_visited_nodes)
+        self.KinematicTree = self.Tree.subgraph(_visited_nodes)
+
+    def kinematic_exploration(self, state_node=0):
+        depth = self.KinematicTree.nodes[state_node]['depth']
+        visit = self.KinematicTree.nodes[state_node]['visit']
+        obj_list = self.KinematicTree.nodes[state_node]['state']
+        left_joint_values = self.KinematicTree.nodes[state_node]['left_joint_values']
+        left_gripper_width = self.KinematicTree.nodes[state_node]['left_gripper_width']
+        right_joint_values = self.KinematicTree.nodes[state_node]['right_joint_values']
+        right_gripper_width = self.KinematicTree.nodes[state_node]['right_gripper_width']
+
+        action_nodes = [action_node for action_node in self.KinematicTree.neighbors(state_node) if
+                        self.KinematicTree.nodes[action_node]['reward'] == 0.]
+        action_values = [self.KinematicTree.nodes[action_node]['value'] for action_node in action_nodes]
+        action_visits = [self.KinematicTree.nodes[action_node]['visit'] for action_node in action_nodes]
+        action_list = [self.KinematicTree.nodes[action_node]['action'] for action_node in action_nodes]
+
+        eps = np.maximum(np.minimum(1., 1 / np.maximum(visit, 1)), 0.01)
+        if np.any(['place' in action['type'] for action in action_list]):
+            if self.goal_obj is not None:
+                table_place_indices = [action_idx for action_idx, action in enumerate(action_list) if
+                                       'table' in action['param']]
+                if len(table_place_indices) > 0:
+                    selected_idx = sampler(self.exploration_method, action_values, action_visits, depth,
+                                           _indices=table_place_indices, eps=eps)
+                else:
+                    selected_idx = sampler(self.exploration_method, action_values, action_visits, depth, eps=eps)
+            else:
+                non_table_place_indices = [action_idx for action_idx, action in enumerate(action_list) if
+                                           'table' not in action['param']]
+                if len(non_table_place_indices) > 0:
+                    selected_idx = sampler(self.exploration_method, action_values, action_visits, depth,
+                                           _indices=non_table_place_indices, eps=eps)
+                else:
+                    selected_idx = sampler(self.exploration_method, action_values, action_visits, depth, eps=eps)
+        else:
+            selected_idx = sampler(self.exploration_method, action_values, action_visits, depth, eps=eps)
+
+        selected_action_node = action_nodes[selected_idx]
+        selected_action = action_list[selected_idx]
+
+        next_state_nodes = [node for node in self.KinematicTree.neighbors(selected_action_node)]
+        if len(next_state_nodes) > 0:
+            next_state_node = next_state_nodes[0]
+            next_object_list = self.KinematicTree.nodes[next_state_node]['state']
+
+            new_next_object_list, next_left_joint_values, next_left_gripper_width, next_right_joint_values, next_right_gripper_width, planned_traj_list = \
+                kinematic_planning(obj_list, next_object_list,
+                                   left_joint_values, left_gripper_width,
+                                   right_joint_values, right_gripper_width,
+                                   selected_action, self.meshes,
+                                   _get_planning_scene_proxy=self.get_planning_scene_proxy,
+                                   _apply_planning_scene_proxy=self.apply_planning_scene_proxy,
+                                   _planning_with_gripper_pose_proxy=self.planning_with_gripper_pose_proxy,
+                                   _planning_with_arm_joints_proxy=self.planning_with_arm_joints_proxy,
+                                   _compute_fk_proxy=self.compute_fk_proxy)
+
+            if new_next_object_list is not None:
+                self.Tree.update(nodes=[(next_state_node, {'state': new_next_object_list})])
+                self.Tree.update(nodes=[(next_state_node, {'left_joint_values': next_left_joint_values})])
+                self.Tree.update(nodes=[(next_state_node, {'left_gripper_width': next_left_gripper_width})])
+                self.Tree.update(nodes=[(next_state_node, {'right_joint_values': next_right_joint_values})])
+                self.Tree.update(nodes=[(next_state_node, {'right_gripper_width': next_right_gripper_width})])
+                self.Tree.update(nodes=[(next_state_node, {'planned_traj_list': planned_traj_list})])
+
+                if len([n for n in self.Tree.neighbors(next_state_node)]) > 0:
+                    return self.kinematic_exploration(next_state_node)
+                else:
+                    depth = self.KinematicTree.nodes[next_state_node]['depth']
+                    _max_depth = np.max([self.Tree.nodes[n]['depth'] for n in self.Tree.nodes])
+                    return depth==_max_depth
+            else:
+                self.Tree.update(nodes=[(selected_action_node, {'action': selected_action})])
+                if selected_action['type'] is 'pick':
+                    selected_action["search_idx"] += 1
+                    self.Tree.update(nodes=[(selected_action_node, {'action': selected_action})])
+                return False
+        else:
+            return False
+
     def get_best_path(self, start_node=0):
         next_nodes = [next_node for next_node in self.Tree.neighbors(start_node)]
         if len(next_nodes) == 0:
@@ -657,6 +792,20 @@ class Tree(object):
             best_idx = np.argmax([self.Tree.nodes[next_node]['value'] for next_node in next_nodes])
             next_node = next_nodes[best_idx]
             return [start_node, ] + self.get_best_path(next_node)
+
+    def get_kinematic_path(self, start_node=0):
+        next_nodes = [next_node for next_node in self.KinematicTree.neighbors(start_node)]
+        if len(next_nodes) == 0:
+            return [start_node], []
+        else:
+            best_idx = np.argmax([self.KinematicTree.nodes[next_node]['value'] for next_node in next_nodes])
+            next_node = next_nodes[best_idx]
+            if 'planned_traj_list' in self.KinematicTree.nodes[next_node]:
+                planned_traj_list = self.KinematicTree.nodes[next_node]['planned_traj_list']
+            else:
+                planned_traj_list = []
+            next_path, next_planned_traj_list = self.get_kinematic_path(next_node)
+            return [start_node,]+next_path, [planned_traj_list,]+next_planned_traj_list
 
     def visualize(self):
         visited_nodes = [n for n in self.Tree.nodes if self.Tree.nodes[n]['visit'] > 0]
@@ -739,27 +888,39 @@ if __name__ == '__main__':
     #     seed_final_state_list.append(best_final_state_list)
     #     print('DONE : {}th seed'.format(seed))
 
+    rospy.init_node('mcts_moveit_planner_unit_test', anonymous=True)
+    rospy.wait_for_service('/get_planning_scene')
+    rospy.wait_for_service('/apply_planning_scene')
+    rospy.wait_for_service('/compute_fk')
+    rospy.wait_for_service('/planning_with_gripper_pose')
+    rospy.wait_for_service('/planning_with_arm_joints')
+
+    get_planning_scene_proxy = rospy.ServiceProxy('/get_planning_scene', GetPlanningScene)
+    apply_planning_scene_proxy = rospy.ServiceProxy('/apply_planning_scene', ApplyPlanningScene)
+    compute_fk_proxy = rospy.ServiceProxy('/compute_fk', GetPositionFK)
+    planning_with_gripper_pose_proxy = rospy.ServiceProxy('/planning_with_gripper_pose', MoveitPlanningGripperPose)
+    planning_with_arm_joints_proxy = rospy.ServiceProxy('/planning_with_arm_joints', MoveitPlanningJointValues)
+
     mcts = Tree(initial_object_list, np.sum(n_obj_per_mesh_types) * 2, coll_mngr, meshes, contact_points,
-                contact_faces, rotation_types, _goal_obj=goal_obj)
-    for opt_idx in range(30):
+                contact_faces, rotation_types, _goal_obj=goal_obj,
+                _get_planning_scene_proxy=get_planning_scene_proxy,
+                _apply_planning_scene_proxy=apply_planning_scene_proxy,
+                _compute_fk_proxy=compute_fk_proxy,
+                _planning_with_gripper_pose_proxy=planning_with_gripper_pose_proxy,
+                _planning_with_arm_joints_proxy=planning_with_arm_joints_proxy)
+    for opt_idx in range(1):
         mcts.exploration(0)
+        print(opt_idx)
 
     best_path_indices = mcts.get_best_path(0)
     best_object_list = mcts.Tree.nodes[best_path_indices[-1]]['state']
-    visualize(best_object_list, meshes, _goal_obj=goal_obj)
-    mcts.visualize()
+    print(best_path_indices)
 
-    visited_nodes = [n for n in mcts.Tree.nodes if mcts.Tree.nodes[n]['depth'] == mcts.max_depth]
-    if len(visited_nodes) == 0:
-        max_depth = np.max([mcts.Tree.nodes[n]['depth'] for n in mcts.Tree.nodes])
-        visited_nodes = [n for n in mcts.Tree.nodes if mcts.Tree.nodes[n]['depth'] == max_depth]
+    mcts.update_subtree()
 
-    children_nodes = visited_nodes
-    while len(children_nodes) > 0:
-        parent_nodes = [parent for child in children_nodes for parent in mcts.Tree.predecessors(child)]
-        visited_nodes += parent_nodes
-        children_nodes = parent_nodes
+    print(mcts.kinematic_exploration(0))
 
-    visited_nodes = np.unique(visited_nodes)
-    level_1_tree = mcts.Tree.subgraph(visited_nodes)
-    mcts.visualize_tree(level_1_tree)
+    kinematic_best_path_indices, planned_traj_list = mcts.get_kinematic_path(0)
+    print(kinematic_best_path_indices)
+
+
