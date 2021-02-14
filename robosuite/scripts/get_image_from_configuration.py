@@ -1,6 +1,7 @@
 import pickle
 import numpy as np
 from robosuite.mcts.util import get_image
+from robosuite.mcts.util import get_meshes
 
 if __name__ == "__main__":
 
@@ -15,9 +16,11 @@ if __name__ == "__main__":
     batch_size = 128
     batch_num = 0
     total_success_rate = 0
+    goal_name = 'regular_shapes'
+    _, _, _, meshes, _, _, _ = get_meshes(_area_ths=1.)
 
-    for dataset_idx in range(300):
-        with open('robosuite/data/sim_dynamic_data'+str(dataset_idx)+'.pkl', 'rb') as f:
+    for dataset_idx in range(1, 72):
+        with open('../data/sim_dynamic_data_'+goal_name+'_'+str(dataset_idx)+'.pkl', 'rb') as f:
             data = pickle.load(f)
 
         configuration_list = data['configuration_list']
@@ -28,7 +31,7 @@ if __name__ == "__main__":
         print('{}/{} success rate : {}'.format(dataset_idx+1, 300, np.mean(success_list)))
 
         for object_list, action, next_object_list, label in zip(configuration_list, action_list, next_configuration_list, success_list):
-            colors, depths, masks = get_image(object_list, action, next_object_list, label=label)
+            colors, depths, masks = get_image(object_list, action, next_object_list, meshes=meshes, label=label, do_visualize=False)
             color1_list.append([colors[0]])
             color2_list.append([colors[1]])
             depth1_list.append([depths[0]])
@@ -38,7 +41,7 @@ if __name__ == "__main__":
             label_list.append(label)
 
             if batch_size == len(label_list):
-                with open('robosuite/data/img_data'+str(batch_num)+'.pkl', 'wb') as f:
+                with open('../data/img_data'+str(batch_num)+'.pkl', 'wb') as f:
                     pickle.dump({'color1_list': color1_list,
                                  'color2_list': color2_list,
                                  'depth1_list': depth1_list,

@@ -2,7 +2,7 @@ import pickle
 
 from mujoco_py import MjSim, MjViewer, MjRenderContextOffscreen
 
-from robosuite.mcts.tree_search import *
+from robosuite.mcts.tree_search_v2 import *
 from robosuite.models.base import MujocoXML
 from robosuite.models.objects import MujocoXMLObject
 from robosuite.utils import transform_utils as T
@@ -66,7 +66,7 @@ if __name__ == "__main__":
 
     goal_name = 'regular_shapes'
     mesh_types, mesh_files, mesh_units, meshes, rotation_types, contact_faces, contact_points = get_meshes(_rotation_types=8)
-    for dataset_idx in range(53, 300):
+    for dataset_idx in range(0, 1):
         success_list = []
         configuration_list = []
         action_list = []
