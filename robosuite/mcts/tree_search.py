@@ -781,7 +781,7 @@ class Tree(object):
 
 
 if __name__ == '__main__':
-    with_robot = False
+    with_robot = True
     if with_robot:
         initial_left_joint_values = {'left_w0': 0.6699952259595108,
                                      'left_w1': 1.030009435085784,

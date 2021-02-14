@@ -854,7 +854,7 @@ def synchronize_planning_scene(_left_joint_values, _left_gripper_width, _right_j
                 point.y = vertex[1]
                 point.z = vertex[2]
                 mesh.vertices.append(point)
-
+            co.header.frame_id = 'base'
             co.meshes = [mesh]
             obj_pose = transform_matrix2pose(obj.pose)
             obj_pose.position.z -= 0.93
@@ -884,6 +884,7 @@ def synchronize_planning_scene(_left_joint_values, _left_gripper_width, _right_j
                 aco = AttachedCollisionObject()
                 aco.link_name = 'left_gripper'
                 aco.object = deepcopy(next_scene.world.collision_objects[co_idx])
+                aco.object.header.frame_id = 'base'
                 aco.object.operation = CollisionObject.ADD
                 next_scene.robot_state.attached_collision_objects.append(aco)
                 next_scene.world.collision_objects[co_idx].operation = CollisionObject.REMOVE
@@ -912,8 +913,7 @@ def synchronize_planning_scene(_left_joint_values, _left_gripper_width, _right_j
     req = ApplyPlanningSceneRequest()
     req.scene = next_scene
     resp = _apply_planning_scene_proxy(req)
-    for _ in range(100):
-        rospy.sleep(0.001)
+    rospy.sleep(3.)
 
 
 def kinematic_planning(_object_list, _next_object_list,
@@ -1013,9 +1013,10 @@ def kinematic_planning(_object_list, _next_object_list,
                     gripper_T = pose2transform_matrix(resp.pose_stamped[0].pose)
                     gripper_T[2, 3] += 0.93
                     pick_obj_idx = get_obj_idx_by_name(_object_list, _action['param'])
-                    _next_object_list[pick_obj_idx].pose = gripper_T.dot(rel_T)
+                    new_next_object_list = deepcopy(_next_object_list)
+                    new_next_object_list[pick_obj_idx].pose = gripper_T.dot(rel_T)
 
-                    return _next_object_list, _after_retreat_left_joint_values, gripper_width, _right_joint_values, _right_gripper_width, planned_traj_list
+                    return new_next_object_list, _after_retreat_left_joint_values, gripper_width, _right_joint_values, _right_gripper_width, planned_traj_list
 
     if _action["type"] is "place":
         held_obj_idx = get_held_object(_object_list)
