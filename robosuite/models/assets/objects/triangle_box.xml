@@ -2,7 +2,7 @@
   <worldbody>
     <body name="triangle_box">
       <body name="collision">
-        <geom pos="0 0 0" mesh="triangle_box" type="mesh" density="5000" rgba="0 1 0 1" group="1" condim="6"/>
+        <geom pos="0 0 0" mesh="triangle_box" type="mesh" density="50" rgba="0 1 0 1" group="1" condim="6"/>
       </body>
       <body name="visual">
         <geom pos="0 0 0" mesh="triangle_box" type="mesh" rgba="0 1 0 1" conaffinity="0" contype="0" group="0" mass="0.0001"/>

@@ -519,6 +519,7 @@ class Tree(object):
                  _get_planning_scene_proxy=None,
                  _apply_planning_scene_proxy=None,
                  _compute_fk_proxy=None,
+                 _cartesian_planning_with_gripper_pose_proxy=None,
                  _planning_with_gripper_pose_proxy=None,
                  _planning_with_arm_joints_proxy=None):
 
@@ -582,6 +583,7 @@ class Tree(object):
         self.get_planning_scene_proxy = _get_planning_scene_proxy
         self.apply_planning_scene_proxy = _apply_planning_scene_proxy
         self.compute_fk_proxy = _compute_fk_proxy
+        self.cartesian_planning_with_gripper_pose_proxy = _cartesian_planning_with_gripper_pose_proxy
         self.planning_with_gripper_pose_proxy = _planning_with_gripper_pose_proxy
         self.planning_with_arm_joints_proxy = _planning_with_arm_joints_proxy
 
@@ -711,7 +713,7 @@ class Tree(object):
         return next_state_value
 
     def update_subtree(self):
-        _visited_nodes = [n for n in self.Tree.nodes if self.Tree.nodes[n]['depth'] == mcts.max_depth]
+        _visited_nodes = [n for n in self.Tree.nodes if self.Tree.nodes[n]['depth'] == self.max_depth]
         if len(_visited_nodes) == 0:
             _max_depth = np.max([self.Tree.nodes[n]['depth'] for n in self.Tree.nodes])
             _visited_nodes = [n for n in self.Tree.nodes if self.Tree.nodes[n]['depth'] == _max_depth]
@@ -781,6 +783,7 @@ class Tree(object):
                                            selected_action, self.meshes,
                                            _get_planning_scene_proxy=self.get_planning_scene_proxy,
                                            _apply_planning_scene_proxy=self.apply_planning_scene_proxy,
+                                           _cartesian_planning_with_gripper_pose_proxy=self.cartesian_planning_with_gripper_pose_proxy,
                                            _planning_with_gripper_pose_proxy=self.planning_with_gripper_pose_proxy,
                                            _planning_with_arm_joints_proxy=self.planning_with_arm_joints_proxy,
                                            _compute_fk_proxy=self.compute_fk_proxy)
@@ -910,7 +913,7 @@ class Tree(object):
                 print("place planning is done before: ", self.KinematicTree.nodes[selected_next_action_node]['done'])
 
                 # while search_idx < len(selected_action["grasp_poses"]):
-                #     print("search idx : ", search_idx)
+                print("search idx : ", search_idx)
                 pick_planning = False
                 place_list = self.KinematicTree.nodes[selected_action_node]['done']
                 if selected_next_action_node not in place_list:
@@ -921,6 +924,7 @@ class Tree(object):
                                            selected_action, self.meshes,
                                            _get_planning_scene_proxy=self.get_planning_scene_proxy,
                                            _apply_planning_scene_proxy=self.apply_planning_scene_proxy,
+                                           _cartesian_planning_with_gripper_pose_proxy=self.cartesian_planning_with_gripper_pose_proxy,
                                            _planning_with_gripper_pose_proxy=self.planning_with_gripper_pose_proxy,
                                            _planning_with_arm_joints_proxy=self.planning_with_arm_joints_proxy,
                                            _compute_fk_proxy=self.compute_fk_proxy)
@@ -939,6 +943,7 @@ class Tree(object):
                                                selected_next_action, self.meshes,
                                                _get_planning_scene_proxy=self.get_planning_scene_proxy,
                                                _apply_planning_scene_proxy=self.apply_planning_scene_proxy,
+                                               _cartesian_planning_with_gripper_pose_proxy=self.cartesian_planning_with_gripper_pose_proxy,
                                                _planning_with_gripper_pose_proxy=self.planning_with_gripper_pose_proxy,
                                                _planning_with_arm_joints_proxy=self.planning_with_arm_joints_proxy,
                                                _compute_fk_proxy=self.compute_fk_proxy)
@@ -949,9 +954,9 @@ class Tree(object):
 
                 if pick_planning and place_planning:
                     done = True
-                #     break
-                # else:
-                #     search_idx += 1
+                    # break
+                    # else:
+                    #     search_idx += 1
                 # print(pick_planning, place_planning, done)
                 if done:
                     if selected_next_action_node not in self.KinematicTree.nodes[selected_action_node]['done']:
@@ -1083,7 +1088,7 @@ if __name__ == '__main__':
     mesh_types, mesh_files, mesh_units, meshes, rotation_types, contact_faces, contact_points = get_meshes(_area_ths=1.)
     initial_object_list, goal_obj, contact_points, contact_faces, coll_mngr, _, _, n_obj_per_mesh_types = \
         configuration_initializer(mesh_types, meshes, mesh_units, rotation_types, contact_faces, contact_points,
-                                  goal_name='stack_easy')
+                                  goal_name='debug_config')
 
     # n_seed = 1
     # opt_num = 100
@@ -1126,12 +1131,14 @@ if __name__ == '__main__':
     rospy.wait_for_service('/get_planning_scene')
     rospy.wait_for_service('/apply_planning_scene')
     rospy.wait_for_service('/compute_fk')
+    rospy.wait_for_service('/cartesian_planning_with_gripper_pose')
     rospy.wait_for_service('/planning_with_gripper_pose')
     rospy.wait_for_service('/planning_with_arm_joints')
 
     get_planning_scene_proxy = rospy.ServiceProxy('/get_planning_scene', GetPlanningScene)
     apply_planning_scene_proxy = rospy.ServiceProxy('/apply_planning_scene', ApplyPlanningScene)
     compute_fk_proxy = rospy.ServiceProxy('/compute_fk', GetPositionFK)
+    cartesian_planning_with_gripper_pose_proxy = rospy.ServiceProxy('/cartesian_planning_with_gripper_pose', MoveitPlanningGripperPose)
     planning_with_gripper_pose_proxy = rospy.ServiceProxy('/planning_with_gripper_pose', MoveitPlanningGripperPose)
     planning_with_arm_joints_proxy = rospy.ServiceProxy('/planning_with_arm_joints', MoveitPlanningJointValues)
 
@@ -1140,9 +1147,10 @@ if __name__ == '__main__':
                 _get_planning_scene_proxy=get_planning_scene_proxy,
                 _apply_planning_scene_proxy=apply_planning_scene_proxy,
                 _compute_fk_proxy=compute_fk_proxy,
+                _cartesian_planning_with_gripper_pose_proxy=cartesian_planning_with_gripper_pose_proxy,
                 _planning_with_gripper_pose_proxy=planning_with_gripper_pose_proxy,
                 _planning_with_arm_joints_proxy=planning_with_arm_joints_proxy)
-    for opt_idx in range(100):
+    for opt_idx in range(10):
         mcts.exploration(0)
         print(opt_idx)
 
@@ -1151,7 +1159,7 @@ if __name__ == '__main__':
     print(best_path_indices)
 
     mcts.update_subtree()
-    for opt_idx in range(100):
+    for opt_idx in range(10):
         print(opt_idx, mcts.kinematic_exploration_v2(0))
 
     kinematic_best_path_indices = mcts.get_best_kinematic_path(0)
