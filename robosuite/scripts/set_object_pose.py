@@ -116,12 +116,11 @@ def joint_position_control(sim, goal_qpos):
 
     goal_reach = True
     for i in range(len(position_error_right)):
-        if position_error_right[i] > 0.01:
+        if np.abs(position_error_right[i]) > 0.01:
             goal_reach = False
             break
-    print(position_error_left)
     for i in range(len(position_error_left)):
-        if position_error_left[i] > 0.01:
+        if np.abs(position_error_left[i]) > 0.01:
             goal_reach = False
             break
 
@@ -157,7 +156,7 @@ if __name__ == "__main__":
                 _cartesian_planning_with_gripper_pose_proxy=cartesian_planning_with_gripper_pose_proxy,
                 _planning_with_gripper_pose_proxy=planning_with_gripper_pose_proxy,
                 _planning_with_arm_joints_proxy=planning_with_arm_joints_proxy)
-    for opt_idx in range(10):
+    for opt_idx in range(100):
         mcts.exploration(0)
         print(opt_idx)
 
@@ -275,17 +274,17 @@ if __name__ == "__main__":
             break
         else:
             next_action_node_idx += 1
-    pick_pre_traj = mcts.Tree.nodes[next_state_node]['planned_traj_list'][next_action_node_idx][0]
-    pick_traj = mcts.Tree.nodes[next_state_node]['planned_traj_list'][next_action_node_idx][1]
-    pick_retreat_traj = mcts.Tree.nodes[next_state_node]['planned_traj_list'][next_action_node_idx][2]
-    plcae_traj = mcts.Tree.nodes[next_next_state_node]['planned_traj_list'][0]
-    plcae_retreat_traj = mcts.Tree.nodes[next_next_state_node]['planned_traj_list'][1]
+    pick_pre_traj = mcts.KinematicTree.nodes[next_state_node]['planned_traj_list'][next_action_node_idx][0]
+    pick_traj = mcts.KinematicTree.nodes[next_state_node]['planned_traj_list'][next_action_node_idx][1]
+    pick_retreat_traj = mcts.KinematicTree.nodes[next_state_node]['planned_traj_list'][next_action_node_idx][2]
+    plcae_traj = mcts.KinematicTree.nodes[next_next_state_node]['planned_traj_list'][0]
+    plcae_retreat_traj = mcts.KinematicTree.nodes[next_next_state_node]['planned_traj_list'][1]
 
     pick_pre_qpos_traj = np.array([[init_right_joint_values[right_joint_name] for right_joint_name in ARM_JOINT_NAME[:7]] + list(p.positions) for p in pick_pre_traj.points])
     pick_qpos_traj = np.array([[init_right_joint_values[right_joint_name] for right_joint_name in ARM_JOINT_NAME[:7]] + list(p.positions) for p in pick_traj.points])
-    pick_retreat_qpos_traj = np.array([[init_right_joint_values[right_joint_name] for right_joint_name in ARM_JOINT_NAME[:7]] + list(p.positions) for p in pick_traj.points])
-    place_qpos_traj = np.array([[init_right_joint_values[right_joint_name] for right_joint_name in ARM_JOINT_NAME[:7]] + list(p.positions) for p in pick_traj.points])
-    plcae_retreat_qpos_traj = np.array([[init_right_joint_values[right_joint_name] for right_joint_name in ARM_JOINT_NAME[:7]] + list(p.positions) for p in pick_traj.points])
+    pick_retreat_qpos_traj = np.array([[init_right_joint_values[right_joint_name] for right_joint_name in ARM_JOINT_NAME[:7]] + list(p.positions) for p in pick_retreat_traj.points])
+    place_qpos_traj = np.array([[init_right_joint_values[right_joint_name] for right_joint_name in ARM_JOINT_NAME[:7]] + list(p.positions) for p in plcae_traj.points])
+    plcae_retreat_qpos_traj = np.array([[init_right_joint_values[right_joint_name] for right_joint_name in ARM_JOINT_NAME[:7]] + list(p.positions) for p in plcae_retreat_traj.points])
 
     for i in range(len(pick_pre_qpos_traj)):
         while True:
@@ -350,3 +349,7 @@ if __name__ == "__main__":
             if is_reach:
                 print("reach the {}-th goal pos".format(i + 1))
                 break
+
+    while True:
+        sim.step()
+        viewer.render()

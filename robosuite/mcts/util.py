@@ -991,7 +991,7 @@ def kinematic_planning(_object_list, _next_object_list,
                 planning_result = resp.success
                 planned_traj = resp.plan
                 if planning_result:
-                    print("Planning to pregrasp succeeds.")
+                    print("Planning to grasp succeeds.")
                     planned_traj_list.append(planned_traj)
                     _after_grasp_left_joint_values = dict(zip(planned_traj.joint_names, planned_traj.points[-1].positions))
                     synchronize_planning_scene(_after_grasp_left_joint_values, gripper_width, _right_joint_values,
@@ -1049,49 +1049,109 @@ def kinematic_planning(_object_list, _next_object_list,
 
         place_pose = _action["placing_pose"]
         gripper_pose = place_pose.dot(np.linalg.inv(rel_T))
+        approaching_dir = gripper_pose[:3, 2]
+        approaching_pose = deepcopy(gripper_pose)
+        # approaching_pose[:3, 3] = approaching_pose[:3, 3] - 15e-2 * approaching_dir
 
         req = MoveitPlanningGripperPoseRequest()
         req.group_name = "left_arm"
         req.ntrial = 1
-        req.gripper_pose = transform_matrix2pose(gripper_pose)
-        req.gripper_pose.position.z -= 0.93
+        req.gripper_pose = transform_matrix2pose(approaching_pose)
+        req.gripper_pose.position.z -= 0.93 - 0.15
         req.gripper_link = "left_gripper"
         resp = _planning_with_gripper_pose_proxy(req)
-        planning_result = resp.success
-        planned_traj = resp.plan
+        approaching_planning_result = resp.success
+        approaching_planned_traj = resp.plan
 
-        if planning_result:
-            print("Planning to place succeeds.")
-            planned_traj_list.append(planned_traj)
-            _after_place_left_joint_values = dict(zip(planned_traj.joint_names, planned_traj.points[-1].positions))
+        if approaching_planning_result:
+            print("Planning to approach to place succeeds.")
+            planned_traj_list.append(approaching_planned_traj)
+            _after_approaching_place_left_joint_values = dict(zip(approaching_planned_traj.joint_names, approaching_planned_traj.points[-1].positions))
 
-            synchronize_planning_scene(_after_place_left_joint_values, _init_left_gripper_width,
+            synchronize_planning_scene(_after_approaching_place_left_joint_values, _init_left_gripper_width,
                                        _right_joint_values,
                                        _right_gripper_width,
-                                       _next_object_list, _meshes,
+                                       _object_list, _meshes,
                                        _get_planning_scene_proxy=_get_planning_scene_proxy,
                                        _apply_planning_scene_proxy=_apply_planning_scene_proxy)
 
-            req = MoveitPlanningJointValuesRequest()
+            req = MoveitPlanningGripperPoseRequest()
             req.group_name = "left_arm"
             req.ntrial = 1
-            req.joint_names = list(_init_left_joint_values.keys())
-            req.joint_poses = list(_init_left_joint_values.values())
+            req.gripper_pose = transform_matrix2pose(gripper_pose)
+            req.gripper_pose.position.z -= 0.93
+            req.gripper_link = "left_gripper"
+            resp = _cartesian_planning_with_gripper_pose_proxy(req)
+            planning_result = resp.success
+            planned_traj = resp.plan
 
-            resp = _planning_with_arm_joints_proxy(req)
-            retreat_planning_result = resp.success
-            retreat_planned_traj = resp.plan
-
-            if retreat_planning_result:
-                print("Planning to retreat succeeds.")
-                planned_traj_list.append(retreat_planned_traj)
-                _after_retreat_left_joint_values = dict(zip(retreat_planned_traj.joint_names, retreat_planned_traj.points[-1].positions))
-                synchronize_planning_scene(_after_retreat_left_joint_values, _init_left_gripper_width, _right_joint_values,
+            if planning_result:
+                print("Planning to place succeeds.")
+                planned_traj_list.append(planned_traj)
+                _after_place_left_joint_values = dict(
+                    zip(planned_traj.joint_names, planned_traj.points[-1].positions))
+                synchronize_planning_scene(_after_place_left_joint_values, _init_left_gripper_width,
+                                           _right_joint_values,
                                            _right_gripper_width,
                                            _next_object_list, _meshes,
                                            _get_planning_scene_proxy=_get_planning_scene_proxy,
                                            _apply_planning_scene_proxy=_apply_planning_scene_proxy)
-                return _next_object_list, _after_retreat_left_joint_values, _init_left_gripper_width, _right_joint_values, _right_gripper_width, planned_traj_list
+
+                resp = _get_planning_scene_proxy(GetPlanningSceneRequest())
+                current_scene = resp.scene
+
+                req = GetPositionFKRequest()
+                req.fk_link_names = ['left_gripper']
+                req.header.frame_id = 'world'
+                req.robot_state = current_scene.robot_state
+                resp = _compute_fk_proxy(req)
+                gripper_T = pose2transform_matrix(resp.pose_stamped[0].pose)
+                gripper_T[:3, 3] = gripper_T[:3, 3] - 15e-2 * gripper_T[:3, 2]
+
+                req = MoveitPlanningGripperPoseRequest()
+                req.group_name = "left_arm"
+                req.ntrial = 1
+                req.gripper_pose = transform_matrix2pose(gripper_T)
+                req.gripper_link = "left_gripper"
+                resp = _cartesian_planning_with_gripper_pose_proxy(req)
+                after_place_planning_result = resp.success
+                after_place_planned_traj = resp.plan
+
+                # after_place_planning_result = planning_result
+                # after_place_planned_traj = deepcopy(planned_traj)
+                # after_place_planned_traj.points = reversed(after_place_planned_traj.points)
+
+                if after_place_planning_result:
+                    print("Planning to safe retreat place succeeds.")
+                    planned_traj_list.append(after_place_planned_traj)
+                    _safe_after_place_left_joint_values = dict(
+                        zip(after_place_planned_traj.joint_names, after_place_planned_traj.points[-1].positions))
+                    synchronize_planning_scene(_safe_after_place_left_joint_values, _init_left_gripper_width,
+                                               _right_joint_values,
+                                               _right_gripper_width,
+                                               _next_object_list, _meshes,
+                                               _get_planning_scene_proxy=_get_planning_scene_proxy,
+                                               _apply_planning_scene_proxy=_apply_planning_scene_proxy)
+                    req = MoveitPlanningJointValuesRequest()
+                    req.group_name = "left_arm"
+                    req.ntrial = 1
+                    req.joint_names = list(_init_left_joint_values.keys())
+                    req.joint_poses = list(_init_left_joint_values.values())
+
+                    resp = _planning_with_arm_joints_proxy(req)
+                    retreat_planning_result = resp.success
+                    retreat_planned_traj = resp.plan
+
+                    if retreat_planning_result:
+                        print("Planning to retreat succeeds.")
+                        planned_traj_list.append(retreat_planned_traj)
+                        _after_retreat_left_joint_values = dict(zip(retreat_planned_traj.joint_names, retreat_planned_traj.points[-1].positions))
+                        synchronize_planning_scene(_after_retreat_left_joint_values, _init_left_gripper_width, _right_joint_values,
+                                                   _right_gripper_width,
+                                                   _next_object_list, _meshes,
+                                                   _get_planning_scene_proxy=_get_planning_scene_proxy,
+                                                   _apply_planning_scene_proxy=_apply_planning_scene_proxy)
+                        return _next_object_list, _after_retreat_left_joint_values, _init_left_gripper_width, _right_joint_values, _right_gripper_width, planned_traj_list
     return None, None, None, None, None, None
 
 

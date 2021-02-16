@@ -34,15 +34,15 @@ if __name__ == "__main__":
 
     for dataset_idx in range(346):
         # with open('../data/sim_dynamic_data_'+goal_name+'_'+str(dataset_idx)+'.pkl', 'rb') as f:
-        with open('../data/sim_dynamic_data'+str(dataset_idx)+'.pkl', 'rb') as f:
+        with open('../prev_data/sim_dynamic_data'+str(dataset_idx)+'.pkl', 'rb') as f:
             data = pickle.load(f)
 
         configuration_list = data['configuration_list']
         success_list = data['success_list']
         action_list = data['action_list']
         next_configuration_list = data['next_configuration_list']
-        total_success_rate += np.mean(success_list) / 41
-        print('{}/{} success rate : {}'.format(dataset_idx+1, 300, np.mean(success_list)))
+        total_success_rate += np.mean(success_list) / 346
+        print('{}/{} success rate : {}'.format(dataset_idx+1, 346, np.mean(success_list)))
 
         for object_list, action, next_object_list, label in zip(configuration_list, action_list, next_configuration_list, success_list):
             place_idx = get_obj_idx_by_name(next_object_list, action['param'])
@@ -51,7 +51,7 @@ if __name__ == "__main__":
             tower_name_list.append(object_list[pick_idx].name)
             # print(tower_name_list)
             # print(len([1 for shape_name in round_shape_list for tower_name in tower_name_list if shape_name in tower_name]))
-            if len([1 for shape_name in round_shape_list for tower_name in tower_name_list if shape_name in tower_name])==0:
+            if len([1 for shape_name in round_shape_list for tower_name in tower_name_list if shape_name in tower_name]) > 0:
                 colors, depths, masks = get_image(object_list, action, next_object_list, meshes=meshes, label=label, do_visualize=False)
                 color1_list.append([colors[0]])
                 color2_list.append([colors[1]])
@@ -62,7 +62,7 @@ if __name__ == "__main__":
                 label_list.append(label)
 
             if batch_size == len(label_list):
-                with open('../data/img_data'+str(batch_num)+'.pkl', 'wb') as f:
+                with open('../prev_data/img_data_test'+str(batch_num)+'.pkl', 'wb') as f:
                     pickle.dump({'color1_list': color1_list,
                                  'color2_list': color2_list,
                                  'depth1_list': depth1_list,

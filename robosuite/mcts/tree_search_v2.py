@@ -565,10 +565,10 @@ class Tree(object):
         self.rotation_types = _rotation_types
 
         self.goal_obj = _goal_obj
-        if _goal_obj is None:
-            self.side_place_flag = True
-        else:
-            self.side_place_flag = False
+        # if _goal_obj is None:
+        #     self.side_place_flag = True
+        # else:
+        self.side_place_flag = False
         self.physcial_constraint_checker = _physcial_constraint_checker
         self.network = None
 
