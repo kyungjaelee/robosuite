@@ -64,9 +64,9 @@ def do_physical_simulation(_sim, _object_list, _action, _next_object_list, _view
 
 if __name__ == "__main__":
 
-    goal_name = 'regular_shapes'
+    goal_name = 'round_shapes'
     mesh_types, mesh_files, mesh_units, meshes, rotation_types, contact_faces, contact_points = get_meshes(_rotation_types=8)
-    for dataset_idx in range(0, 1):
+    for dataset_idx in range(41, 100):
         success_list = []
         configuration_list = []
         action_list = []
