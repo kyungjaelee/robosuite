@@ -1,6 +1,6 @@
 from mujoco_py import MjSim, MjViewer, cymj
 
-from robosuite.mcts.tree_search_v2 import *
+from robosuite.mcts.tree_search_v3 import *
 from robosuite.models.base import MujocoXML
 from robosuite.models.objects import MujocoXMLObject
 from robosuite.utils import transform_utils as T
@@ -46,6 +46,7 @@ torques_low = [-50., -100., -50., -50., -15., -15., -15., -50., -100., -50., -50
 
 ARM_JOINT_NAME = ['right_s0', 'right_s1', 'right_e0', 'right_e1', 'right_w0', 'right_w1', 'right_w2',
                   'left_s0', 'left_s1', 'left_e0', 'left_e1', 'left_w0', 'left_w1', 'left_w2']
+
 
 def planning_with_target_pose(sim, TARGET_JOINT_QPOS, get_planning_scene_proxy, apply_planning_scene_proxy, get_joint_trajectory_proxy):
     resp = get_planning_scene_proxy(GetPlanningSceneRequest())
@@ -116,11 +117,11 @@ def joint_position_control(sim, goal_qpos):
 
     goal_reach = True
     for i in range(len(position_error_right)):
-        if np.abs(position_error_right[i]) > 0.01:
+        if np.abs(position_error_right[i]) > 0.005:
             goal_reach = False
             break
     for i in range(len(position_error_left)):
-        if np.abs(position_error_left[i]) > 0.01:
+        if np.abs(position_error_left[i]) > 0.005:
             goal_reach = False
             break
 
@@ -128,10 +129,10 @@ def joint_position_control(sim, goal_qpos):
 
 
 if __name__ == "__main__":
-    mesh_types, mesh_files, mesh_units, meshes, rotation_types, contact_faces, contact_points = get_meshes(_area_ths=1.)
+    mesh_types, mesh_files, mesh_units, meshes, rotation_types, contact_faces, contact_points = get_meshes(_area_ths=0.003)
     initial_object_list, goal_obj, contact_points, contact_faces, coll_mngr, _, _, n_obj_per_mesh_types = \
         configuration_initializer(mesh_types, meshes, mesh_units, rotation_types, contact_faces, contact_points,
-                                  goal_name='debug_config')
+                                  goal_name='tower_goal')
 
     rospy.init_node('mcts_moveit_planner_unit_test', anonymous=True)
     rospy.wait_for_service('/get_planning_scene')
@@ -148,31 +149,50 @@ if __name__ == "__main__":
     planning_with_gripper_pose_proxy = rospy.ServiceProxy('/planning_with_gripper_pose', MoveitPlanningGripperPose)
     planning_with_arm_joints_proxy = rospy.ServiceProxy('/planning_with_arm_joints', MoveitPlanningJointValues)
 
+    np.random.seed(0)
     mcts = Tree(initial_object_list, np.sum(n_obj_per_mesh_types) * 2, coll_mngr, meshes, contact_points,
                 contact_faces, rotation_types, _goal_obj=goal_obj,
+                _exploration={'method': 'random', 'param': 1000.},
                 _get_planning_scene_proxy=get_planning_scene_proxy,
                 _apply_planning_scene_proxy=apply_planning_scene_proxy,
                 _compute_fk_proxy=compute_fk_proxy,
                 _cartesian_planning_with_gripper_pose_proxy=cartesian_planning_with_gripper_pose_proxy,
                 _planning_with_gripper_pose_proxy=planning_with_gripper_pose_proxy,
                 _planning_with_arm_joints_proxy=planning_with_arm_joints_proxy)
-    for opt_idx in range(100):
+    opt_num = 1000
+    best_value = -np.inf
+    opt_idx = 0
+    # branching_factor = False
+
+    while opt_idx < opt_num:
         mcts.exploration(0)
-        print(opt_idx)
+        if best_value < mcts.Tree.nodes[0]['value']:
+            best_value = mcts.Tree.nodes[0]['value']
+
+            print(opt_idx, best_value)
+        if (opt_idx + 1) % 100 == 0:
+            print('============={}/{}============='.format(opt_idx, opt_num))
+
+        # if len([action for action in mcts.KinematicTree.neighbors(0)]) > 3:
+        #     branching_factor = True
+        #     print(mcts.current_max_depth)
+        opt_idx += 1
 
     best_path_indices = mcts.get_best_path(0)
     best_object_list = mcts.Tree.nodes[best_path_indices[-1]]['state']
     print(best_path_indices)
+    visualize(best_object_list, mcts.meshes, mcts.goal_obj)
 
     mcts.update_subtree()
-    for opt_idx in range(100):
-        value = mcts.kinematic_exploration_v2(0)
+    print(mcts.num_kinematic_leaves, "number of leaves are found")
+    for opt_idx in range(20):
+        value = mcts.kinematic_exploration_v3(0)
         print(opt_idx, value)
-        if value > 0.:
-            break
+        # if value > 0.:
+        #     break
 
     kinematic_best_path_indices = mcts.get_best_kinematic_path(0)
-    print(kinematic_best_path_indices)
+    print(len(kinematic_best_path_indices), kinematic_best_path_indices)
 
     arena_model = MujocoXML(xml_path_completion("arenas/empty_arena.xml"))
 
@@ -215,34 +235,35 @@ if __name__ == "__main__":
     arena_model.merge(baxter_model)
 
     for obj in initial_object_list:
-        if 'custom_table' in obj.name:
-            table_model = MujocoXML(xml_path_completion("objects/custom_table.xml"))
-            table_pos_arr, table_quat_arr = T.mat2pose(obj.pose)
-            table_body = table_model.worldbody.find("./body[@name='custom_table']")
-            table_body.set("pos", array_to_string(table_pos_arr))
-            table_body.set("quat", array_to_string(table_quat_arr[[3, 0, 1, 2]]))
-            arena_model.merge(table_model)
-        else:
-            if 'arch_box' in obj.name:
-                obj_xml_path = "objects/arch_box.xml"
-            elif 'rect_box' in obj.name:
-                obj_xml_path = "objects/rect_box.xml"
-            elif 'square_box' in obj.name:
-                obj_xml_path = "objects/square_box.xml"
-            elif 'half_cylinder_box' in obj.name:
-                obj_xml_path = "objects/half_cylinder_box.xml"
-            elif 'triangle_box' in obj.name:
-                obj_xml_path = "objects/triangle_box.xml"
+        if 'gripper' not in obj.name:
+            if 'custom_table' in obj.name:
+                table_model = MujocoXML(xml_path_completion("objects/custom_table.xml"))
+                table_pos_arr, table_quat_arr = T.mat2pose(obj.pose)
+                table_body = table_model.worldbody.find("./body[@name='custom_table']")
+                table_body.set("pos", array_to_string(table_pos_arr))
+                table_body.set("quat", array_to_string(table_quat_arr[[3, 0, 1, 2]]))
+                arena_model.merge(table_model)
+            else:
+                if 'arch_box' in obj.name:
+                    obj_xml_path = "objects/arch_box.xml"
+                elif 'rect_box' in obj.name:
+                    obj_xml_path = "objects/rect_box.xml"
+                elif 'square_box' in obj.name:
+                    obj_xml_path = "objects/square_box.xml"
+                elif 'half_cylinder_box' in obj.name:
+                    obj_xml_path = "objects/half_cylinder_box.xml"
+                elif 'triangle_box' in obj.name:
+                    obj_xml_path = "objects/triangle_box.xml"
 
-            mj_obj_model = MujocoXMLObject(xml_path_completion(obj_xml_path), name=obj.name)
+                mj_obj_model = MujocoXMLObject(xml_path_completion(obj_xml_path), name=obj.name)
 
-            arena_model.merge_asset(mj_obj_model)
-            mj_obj = mj_obj_model.get_collision(site=True)
+                arena_model.merge_asset(mj_obj_model)
+                mj_obj = mj_obj_model.get_collision(site=True)
 
-            joint = mj_obj_model.joints[0]
-            mj_obj.append(new_joint(name=obj.name+"_joint", **joint))
+                joint = mj_obj_model.joints[0]
+                mj_obj.append(new_joint(name=obj.name+"_joint", **joint))
 
-            arena_model.worldbody.append(mj_obj)
+                arena_model.worldbody.append(mj_obj)
 
     init_left_joint_values = mcts.Tree.nodes[0]['left_joint_values']
     init_right_joint_values = mcts.Tree.nodes[0]['right_joint_values']
@@ -252,7 +273,7 @@ if __name__ == "__main__":
     state.qpos[qpos_idx_left] = [init_left_joint_values[left_joint_name] for left_joint_name in ARM_JOINT_NAME[7:]]
     state.qpos[qpos_idx_right] = [init_right_joint_values[left_joint_name] for left_joint_name in ARM_JOINT_NAME[:7]]
     for obj in initial_object_list:
-        if 'custom_table' not in obj.name:
+        if 'gripper' not in obj.name and 'custom_table' not in obj.name:
             pos_arr, quat_arr = T.mat2pose(obj.pose)
             obj_qpos_addr = sim.model.get_joint_qpos_addr(obj.name+"_joint")
             state.qpos[obj_qpos_addr[0]:obj_qpos_addr[0]+3] = pos_arr
@@ -262,94 +283,268 @@ if __name__ == "__main__":
     viewer.vopt.geomgroup[0] = 0
     init_pose = np.array([init_right_joint_values[right_joint_name] for right_joint_name in ARM_JOINT_NAME[:7]] + [init_left_joint_values[left_joint_name] for left_joint_name in ARM_JOINT_NAME[7:]])
     path_idx = 0
-    state_node = kinematic_best_path_indices[path_idx]
-    action_node = kinematic_best_path_indices[path_idx+1]
-    next_state_node = kinematic_best_path_indices[path_idx+2]
-    next_action_node = kinematic_best_path_indices[path_idx+3]
-    next_next_state_node = kinematic_best_path_indices[path_idx+4]
+    ctrl_timeout = 30000
 
-    next_action_node_idx = 0
-    for next_action_node_candidate in mcts.KinematicTree.nodes[action_node]['done']:
-        if next_action_node_candidate == next_action_node:
-            break
-        else:
-            next_action_node_idx += 1
-    pick_pre_traj = mcts.KinematicTree.nodes[next_state_node]['planned_traj_list'][next_action_node_idx][0]
-    pick_traj = mcts.KinematicTree.nodes[next_state_node]['planned_traj_list'][next_action_node_idx][1]
-    pick_retreat_traj = mcts.KinematicTree.nodes[next_state_node]['planned_traj_list'][next_action_node_idx][2]
-    plcae_traj = mcts.KinematicTree.nodes[next_next_state_node]['planned_traj_list'][0]
-    plcae_retreat_traj = mcts.KinematicTree.nodes[next_next_state_node]['planned_traj_list'][1]
+    while path_idx < len(kinematic_best_path_indices)-1 and len(kinematic_best_path_indices) > 1:
+        state_node = kinematic_best_path_indices[path_idx]
+        action_node = kinematic_best_path_indices[path_idx+1]
+        next_state_node = kinematic_best_path_indices[path_idx+2]
 
-    pick_pre_qpos_traj = np.array([[init_right_joint_values[right_joint_name] for right_joint_name in ARM_JOINT_NAME[:7]] + list(p.positions) for p in pick_pre_traj.points])
-    pick_qpos_traj = np.array([[init_right_joint_values[right_joint_name] for right_joint_name in ARM_JOINT_NAME[:7]] + list(p.positions) for p in pick_traj.points])
-    pick_retreat_qpos_traj = np.array([[init_right_joint_values[right_joint_name] for right_joint_name in ARM_JOINT_NAME[:7]] + list(p.positions) for p in pick_retreat_traj.points])
-    place_qpos_traj = np.array([[init_right_joint_values[right_joint_name] for right_joint_name in ARM_JOINT_NAME[:7]] + list(p.positions) for p in plcae_traj.points])
-    plcae_retreat_qpos_traj = np.array([[init_right_joint_values[right_joint_name] for right_joint_name in ARM_JOINT_NAME[:7]] + list(p.positions) for p in plcae_retreat_traj.points])
+        action = mcts.KinematicTree.nodes[action_node]['action']
+        depth = mcts.KinematicTree.nodes[next_state_node]['depth']
+        print("current depth:", depth)
+        if "pick" in action['type']:
+            pick_pre_traj = mcts.KinematicTree.nodes[next_state_node]['planned_traj_list'][0]
+            pick_traj = mcts.KinematicTree.nodes[next_state_node]['planned_traj_list'][1]
+            pick_retreat_traj = mcts.KinematicTree.nodes[next_state_node]['planned_traj_list'][2]
+            pick_pre_qpos_traj = np.array([[init_right_joint_values[right_joint_name] for right_joint_name in ARM_JOINT_NAME[:7]] + list(p.positions) for p in pick_pre_traj.points])
+            pick_qpos_traj = np.array([[init_right_joint_values[right_joint_name] for right_joint_name in ARM_JOINT_NAME[:7]] + list(p.positions) for p in pick_traj.points])
+            pick_retreat_qpos_traj = np.array([[init_right_joint_values[right_joint_name] for right_joint_name in ARM_JOINT_NAME[:7]] + list(p.positions) for p in pick_retreat_traj.points])
+            print("======================Go to pregrasp pose=========================")
+            for i in range(len(pick_pre_qpos_traj)):
+                for _ in range(ctrl_timeout):
+                    torques, is_reach = joint_position_control(sim, pick_pre_qpos_traj[i])
+                    if is_reach:
+                        print("reach the {}-th goal pos".format(i + 1))
+                        break
 
-    for i in range(len(pick_pre_qpos_traj)):
-        while True:
-            torques, is_reach = joint_position_control(sim, pick_pre_qpos_traj[i])
-            sim.data.ctrl[:14] = torques
-            sim.step()
-            viewer.render()
-            if is_reach:
-                print("reach the {}-th goal pos".format(i + 1))
-                break
+                    sim.data.ctrl[:14] = torques
+                    sim.data.ctrl[14:16] = [-0.0115, 0.0115]
+                    sim.step()
+                    viewer.render()
 
-    for i in range(len(pick_qpos_traj)):
-        while True:
-            torques, is_reach = joint_position_control(sim, pick_qpos_traj[i])
-            sim.data.ctrl[:14] = torques
-            sim.step()
-            viewer.render()
-            if is_reach:
-                print("reach the {}-th goal pos".format(i + 1))
-                break
+            print("======================Pick=========================")
+            for i in range(len(pick_qpos_traj)):
+                for _ in range(ctrl_timeout):
+                    torques, is_reach = joint_position_control(sim, pick_qpos_traj[i])
+                    if is_reach:
+                        print("reach the {}-th goal pos".format(i + 1))
+                        break
 
-    for _ in range(1000):
-        sim.data.ctrl[14:16] = [0.020833, -0.020833]
-        sim.step()
-        viewer.render()
-    print("gripper is closed")
+                    sim.data.ctrl[:14] = torques
+                    sim.data.ctrl[14:16] = [-0.0115, 0.0115]
+                    sim.step()
+                    viewer.render()
 
-    print(len(pick_retreat_qpos_traj))
-    for i in range(len(pick_retreat_qpos_traj)):
-        while True:
-            torques, is_reach = joint_position_control(sim, pick_retreat_qpos_traj[i])
-            sim.data.ctrl[:14] = torques
-            sim.data.ctrl[14:16] = [0.020833, -0.020833]
-            sim.step()
-            viewer.render()
-            if is_reach:
-                print("reach the {}-th goal pos".format(i + 1))
-                break
+            for _ in range(1000):
+                sim.data.ctrl[14:16] = [0.020833, -0.020833]
+                sim.step()
+                viewer.render()
+            print("gripper is closed")
 
-    for i in range(len(place_qpos_traj)):
-        while True:
-            torques, is_reach = joint_position_control(sim, place_qpos_traj[i])
-            sim.data.ctrl[:14] = torques
-            sim.data.ctrl[14:16] = [0.020833, -0.020833]
-            sim.step()
-            viewer.render()
-            if is_reach:
-                print("reach the {}-th goal pos".format(i + 1))
-                break
+            print("======================Retreat to initial pose=========================")
+            for i in range(len(pick_retreat_qpos_traj)):
+                for _ in range(ctrl_timeout):
+                    torques, is_reach = joint_position_control(sim, pick_retreat_qpos_traj[i])
+                    if is_reach:
+                        print("reach the {}-th goal pos".format(i + 1))
+                        break
 
-    for _ in range(1000):
-        sim.data.ctrl[14:16] = [-0.0115, 0.0115]
-        sim.step()
-        viewer.render()
+                    sim.data.ctrl[:14] = torques
+                    sim.data.ctrl[14:16] = [0.020833, -0.020833]
+                    sim.step()
+                    viewer.render()
+        elif "place" in action["type"]:
+            plcae_approach_traj = mcts.KinematicTree.nodes[next_state_node]['planned_traj_list'][0]
+            plcae_traj = mcts.KinematicTree.nodes[next_state_node]['planned_traj_list'][1]
+            plcae_safe_retreat_traj = mcts.KinematicTree.nodes[next_state_node]['planned_traj_list'][2]
+            plcae_retreat_traj = mcts.KinematicTree.nodes[next_state_node]['planned_traj_list'][3]
+            place_approach_qpos_traj = np.array([[init_right_joint_values[right_joint_name] for right_joint_name in ARM_JOINT_NAME[:7]] + list(p.positions) for p in plcae_approach_traj.points])
+            place_qpos_traj = np.array([[init_right_joint_values[right_joint_name] for right_joint_name in ARM_JOINT_NAME[:7]] + list(p.positions) for p in plcae_traj.points])
+            plcae_safe_retreat_qpos_traj = np.array([[init_right_joint_values[right_joint_name] for right_joint_name in ARM_JOINT_NAME[:7]] + list(p.positions) for p in plcae_safe_retreat_traj.points])
+            plcae_retreat_qpos_traj = np.array([[init_right_joint_values[right_joint_name] for right_joint_name in ARM_JOINT_NAME[:7]] + list(p.positions) for p in plcae_retreat_traj.points])
 
-    for i in range(len(plcae_retreat_qpos_traj)):
-        while True:
-            torques, is_reach = joint_position_control(sim, plcae_retreat_qpos_traj[i])
-            sim.data.ctrl[:14] = torques
-            sim.step()
-            viewer.render()
-            if is_reach:
-                print("reach the {}-th goal pos".format(i + 1))
-                break
+            print("======================Go to preplace pose=========================")
+            for i in range(len(place_approach_qpos_traj)):
+                for _ in range(ctrl_timeout):
+                    torques, is_reach = joint_position_control(sim, place_approach_qpos_traj[i])
+                    if is_reach:
+                        print("reach the {}-th goal pos".format(i + 1))
+                        break
 
+                    sim.data.ctrl[:14] = torques
+                    sim.data.ctrl[14:16] = [0.020833, -0.020833]
+                    sim.step()
+                    viewer.render()
+
+            print("======================Place=========================")
+            for i in range(len(place_qpos_traj)):
+                for _ in range(ctrl_timeout):
+                    torques, is_reach = joint_position_control(sim, place_qpos_traj[i])
+                    if is_reach:
+                        print("reach the {}-th goal pos".format(i + 1))
+                        break
+
+                    sim.data.ctrl[:14] = torques
+                    sim.data.ctrl[14:16] = [0.020833, -0.020833]
+                    sim.step()
+                    viewer.render()
+
+            for _ in range(1000):
+                sim.data.ctrl[14:16] = [-0.0115, 0.0115]
+                sim.step()
+                viewer.render()
+            print("gripper is open")
+
+            print("======================Retreat to preplace pose=========================")
+            for i in range(len(plcae_safe_retreat_qpos_traj)):
+                for _ in range(ctrl_timeout):
+                    torques, is_reach = joint_position_control(sim, plcae_safe_retreat_qpos_traj[i])
+                    if is_reach:
+                        print("reach the {}-th goal pos".format(i + 1))
+                        break
+
+                    sim.data.ctrl[:14] = torques
+                    sim.data.ctrl[14:16] = [-0.0115, 0.0115]
+                    sim.step()
+                    viewer.render()
+
+            print("======================Retreat to initial pose=========================")
+            for i in range(len(plcae_retreat_qpos_traj)):
+                for _ in range(ctrl_timeout):
+                    torques, is_reach = joint_position_control(sim, plcae_retreat_qpos_traj[i])
+                    if is_reach:
+                        print("reach the {}-th goal pos".format(i + 1))
+                        break
+
+                    sim.data.ctrl[:14] = torques
+                    sim.data.ctrl[14:16] = [-0.0115, 0.0115]
+                    sim.step()
+                    viewer.render()
+        path_idx += 2
+    print("finish all trajectories")
+    print("staying")
     while True:
+        torques, is_reach = joint_position_control(sim, init_pose)
+        sim.data.ctrl[:14] = torques
         sim.step()
         viewer.render()
+
+    # while path_idx <= len(kinematic_best_path_indices) and len(kinematic_best_path_indices) > 1:
+    #     state_node = kinematic_best_path_indices[path_idx]
+    #     action_node = kinematic_best_path_indices[path_idx+1]
+    #     next_state_node = kinematic_best_path_indices[path_idx+2]
+    #     next_action_node = kinematic_best_path_indices[path_idx+3]
+    #     next_next_state_node = kinematic_best_path_indices[path_idx+4]
+    #
+    #     next_action_node_idx = 0
+    #     if 'done' in mcts.KinematicTree.nodes[action_node]:
+    #         for next_action_node_candidate in mcts.KinematicTree.nodes[action_node]['done']:
+    #             if next_action_node_candidate == next_action_node:
+    #                 break
+    #             else:
+    #                 next_action_node_idx += 1
+    #     else:
+    #         break
+    #     depth = mcts.KinematicTree.nodes[next_state_node]['depth']
+    #     print("current depth:", depth)
+    #     pick_pre_traj = mcts.KinematicTree.nodes[next_state_node]['planned_traj_list'][next_action_node_idx][0]
+    #     pick_traj = mcts.KinematicTree.nodes[next_state_node]['planned_traj_list'][next_action_node_idx][1]
+    #     pick_retreat_traj = mcts.KinematicTree.nodes[next_state_node]['planned_traj_list'][next_action_node_idx][2]
+    #     plcae_approach_traj = mcts.KinematicTree.nodes[next_next_state_node]['planned_traj_list'][0]
+    #     plcae_traj = mcts.KinematicTree.nodes[next_next_state_node]['planned_traj_list'][1]
+    #     plcae_safe_retreat_traj = mcts.KinematicTree.nodes[next_next_state_node]['planned_traj_list'][2]
+    #     plcae_retreat_traj = mcts.KinematicTree.nodes[next_next_state_node]['planned_traj_list'][3]
+    #
+    #     pick_pre_qpos_traj = np.array([[init_right_joint_values[right_joint_name] for right_joint_name in ARM_JOINT_NAME[:7]] + list(p.positions) for p in pick_pre_traj.points])
+    #     pick_qpos_traj = np.array([[init_right_joint_values[right_joint_name] for right_joint_name in ARM_JOINT_NAME[:7]] + list(p.positions) for p in pick_traj.points])
+    #     pick_retreat_qpos_traj = np.array([[init_right_joint_values[right_joint_name] for right_joint_name in ARM_JOINT_NAME[:7]] + list(p.positions) for p in pick_retreat_traj.points])
+    #     place_approach_qpos_traj = np.array([[init_right_joint_values[right_joint_name] for right_joint_name in ARM_JOINT_NAME[:7]] + list(p.positions) for p in plcae_approach_traj.points])
+    #     place_qpos_traj = np.array([[init_right_joint_values[right_joint_name] for right_joint_name in ARM_JOINT_NAME[:7]] + list(p.positions) for p in plcae_traj.points])
+    #     plcae_safe_retreat_qpos_traj = np.array([[init_right_joint_values[right_joint_name] for right_joint_name in ARM_JOINT_NAME[:7]] + list(p.positions) for p in plcae_safe_retreat_traj.points])
+    #     plcae_retreat_qpos_traj = np.array([[init_right_joint_values[right_joint_name] for right_joint_name in ARM_JOINT_NAME[:7]] + list(p.positions) for p in plcae_retreat_traj.points])
+    #
+    #     for i in range(len(pick_pre_qpos_traj)):
+    #         while True:
+    #             torques, is_reach = joint_position_control(sim, pick_pre_qpos_traj[i])
+    #             if is_reach:
+    #                 print("reach the {}-th goal pos".format(i + 1))
+    #                 break
+    #
+    #             sim.data.ctrl[:14] = torques
+    #             sim.data.ctrl[14:16] = [-0.0115, 0.0115]
+    #             sim.step()
+    #             viewer.render()
+    #
+    #     for i in range(len(pick_qpos_traj)):
+    #         while True:
+    #             torques, is_reach = joint_position_control(sim, pick_qpos_traj[i])
+    #             if is_reach:
+    #                 print("reach the {}-th goal pos".format(i + 1))
+    #                 break
+    #
+    #             sim.data.ctrl[:14] = torques
+    #             sim.data.ctrl[14:16] = [-0.0115, 0.0115]
+    #             sim.step()
+    #             viewer.render()
+    #
+    #     for _ in range(1000):
+    #         sim.data.ctrl[14:16] = [0.020833, -0.020833]
+    #         sim.step()
+    #         viewer.render()
+    #     print("gripper is closed")
+    #
+    #     for i in range(len(place_approach_qpos_traj)):
+    #         while True:
+    #             torques, is_reach = joint_position_control(sim, place_approach_qpos_traj[i])
+    #             if is_reach:
+    #                 print("reach the {}-th goal pos".format(i + 1))
+    #                 break
+    #
+    #             sim.data.ctrl[:14] = torques
+    #             sim.data.ctrl[14:16] = [0.020833, -0.020833]
+    #             sim.step()
+    #             viewer.render()
+    #
+    #     for i in range(len(place_qpos_traj)):
+    #         while True:
+    #             torques, is_reach = joint_position_control(sim, place_qpos_traj[i])
+    #             if is_reach:
+    #                 print("reach the {}-th goal pos".format(i + 1))
+    #                 break
+    #
+    #             sim.data.ctrl[:14] = torques
+    #             sim.data.ctrl[14:16] = [0.020833, -0.020833]
+    #             sim.step()
+    #             viewer.render()
+    #
+    #     for _ in range(1000):
+    #         sim.data.ctrl[14:16] = [-0.0115, 0.0115]
+    #         sim.step()
+    #         viewer.render()
+    #     print("gripper is open")
+    #
+    #     for i in range(len(plcae_safe_retreat_qpos_traj)):
+    #         while True:
+    #             torques, is_reach = joint_position_control(sim, plcae_safe_retreat_qpos_traj[i])
+    #             if is_reach:
+    #                 print("reach the {}-th goal pos".format(i + 1))
+    #                 break
+    #
+    #             sim.data.ctrl[:14] = torques
+    #             sim.data.ctrl[14:16] = [-0.0115, 0.0115]
+    #             sim.step()
+    #             viewer.render()
+    #
+    #     for i in range(len(plcae_retreat_qpos_traj)):
+    #         while True:
+    #             torques, is_reach = joint_position_control(sim, plcae_retreat_qpos_traj[i])
+    #             if is_reach:
+    #                 print("reach the {}-th goal pos".format(i + 1))
+    #                 break
+    #
+    #             sim.data.ctrl[:14] = torques
+    #             sim.data.ctrl[14:16] = [-0.0115, 0.0115]
+    #             sim.step()
+    #             viewer.render()
+    #
+    #     path_idx += 4
+    #     print(len(kinematic_best_path_indices), path_idx)
+    #
+    # print("finish all trajectories")
+    # print("staying")
+    # while True:
+    #     torques, is_reach = joint_position_control(sim, init_pose)
+    #     sim.data.ctrl[:14] = torques
+    #     sim.step()
+    #     viewer.render()

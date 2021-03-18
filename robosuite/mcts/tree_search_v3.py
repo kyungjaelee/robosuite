@@ -12,7 +12,7 @@ import numpy as np
 # from geometry_msgs.msg import *
 # from mujoco_moveit_connector.srv import *
 
-from robosuite.mcts.util import *
+from robosuite.mcts.util_v2 import *
 # from robosuite.utils import transform_utils as tf
 # import trimesh.proximity
 
@@ -380,12 +380,11 @@ def check_stability(obj_idx, object_list, meshes, com1, volume1):
 
         closest_points, dists, surface_idx = trimesh.proximity.closest_point(mesh2, [com1])
         project_point2 = closest_points[0]
-        project_point2 = project_point2 / np.sqrt(np.sum(project_point2 ** 2.))
-        safe_com = mesh2.face_normals[surface_idx[0]][2] > 0.999 and (project_point2[0] > mesh2.bounds[0][0] + 0.01) and (project_point2[0] < mesh2.bounds[1][0] - 0.01) and (project_point2[1] > mesh2.bounds[0][1] + 0.01) and (project_point2[1] < mesh2.bounds[1][1] - 0.01)
+        safe_com = mesh2.face_normals[surface_idx[0]][2] > 0.999 and (project_point2[0] > mesh2.bounds[0][0] + 0.015) and (project_point2[0] < mesh2.bounds[1][0] - 0.015) and (project_point2[1] > mesh2.bounds[0][1] + 0.015) and (project_point2[1] < mesh2.bounds[1][1] - 0.015)
         # print(dists[0])
         # print(com1)
         # print(closest_points[0])
-        # print(project_point2)
+        # print(mesh2.face_normals[surface_idx[0]])
         # print(mesh2.bounds[0][0]+0.01, project_point2[0])
         # print(safe_com, obj_name)
         if safe_com:
@@ -639,7 +638,7 @@ class Tree(object):
                                                       'true_reward': 0.,
                                                       'value': -np.inf,
                                                       'true_value': -np.inf,
-                                                      'done': [],
+                                                      'done': False,
                                                       'visit': 0,
                                                       'true_visit': 0})])
                         self.Tree.add_edge(state_node, child_action_node)
@@ -661,6 +660,7 @@ class Tree(object):
                 else:
                     non_table_place_indices = [action_idx for action_idx, action in enumerate(action_list) if
                                                'table' not in action['param']]
+                    # print([action['param'] for action in action_list])
                     if len(non_table_place_indices) > 0:
                         selected_idx = sampler(self.exploration_method, action_values, action_visits, depth, _indices=non_table_place_indices, eps=eps)
                     else:
@@ -669,12 +669,12 @@ class Tree(object):
                 selected_idx = sampler(self.exploration_method, action_values, action_visits, depth, eps=eps)
             selected_action_node = action_nodes[selected_idx]
             selected_action_value = action_values[selected_idx]
+            # print(depth, self.max_depth, self.Tree.nodes[selected_action_node]['action']['type'], self.Tree.nodes[selected_action_node]['action']['param'])
             selected_action_value_new = self.action_exploration(selected_action_node)
 
             if selected_action_value < selected_action_value_new:
                 action_values[selected_idx] = selected_action_value_new
                 self.Tree.update(nodes=[(state_node, {'value': np.max(action_values)})])
-                self.Tree.update(nodes=[(state_node, {'true_value': np.max(action_values)})])
             return np.max(action_values)
         else:
             return 0.0
@@ -682,6 +682,7 @@ class Tree(object):
     def action_exploration(self, action_node):
         obj_list = self.Tree.nodes[action_node]['state']
         action = self.Tree.nodes[action_node]['action']
+        action_value = self.Tree.nodes[action_node]['value']
         depth = self.Tree.nodes[action_node]['depth']
         visit = self.Tree.nodes[action_node]['visit']
         self.Tree.update(nodes=[(action_node, {'visit': visit + 1})])
@@ -689,13 +690,11 @@ class Tree(object):
         next_state_nodes = [node for node in self.Tree.neighbors(action_node)]
         if len(next_state_nodes) == 0:
             next_obj_list = get_transition(obj_list, action)
-
             if next_obj_list is not None:
                 if self.physcial_constraint_checker is not None:
                     physical_demonstratablity = self.physcial_constraint_checker(obj_list, action, next_obj_list, self.meshes, network=self.network)
                 else:
                     physical_demonstratablity = True
-
                 if physical_demonstratablity:
                     rew = get_reward(obj_list, action, self.goal_obj, next_obj_list, self.meshes)
 
@@ -712,28 +711,28 @@ class Tree(object):
                                               'true_visit': 0})])
                     self.Tree.add_edge(action_node, child_node)
             next_state_nodes = [node for node in self.Tree.neighbors(action_node)]
+            # print(depth, self.max_depth, action['type'], action['param'], len(next_state_nodes))
 
         if len(next_state_nodes) > 0:
             next_state_node = next_state_nodes[0]
-            next_state_value = self.Tree.nodes[next_state_node]['value']
-            next_state_visit = self.Tree.nodes[next_state_node]['visit']
             reward = self.Tree.nodes[next_state_node]['reward']
-
-            next_state_value_new = reward + self.exploration(next_state_node)
-            if next_state_value < next_state_value_new:
-                next_state_value = next_state_value_new
+            action_value_new = reward + self.exploration(next_state_node)
+            if action_value < action_value_new:
+                action_value = action_value_new
+            self.Tree.update(nodes=[(action_node, {'value': action_value})])
         else:
-            next_state_value = -np.inf
+            action_value = -np.inf
             self.Tree.update(nodes=[(action_node, {'reward': -np.inf})])
-        self.Tree.update(nodes=[(action_node, {'value': next_state_value})])
-        self.Tree.update(nodes=[(action_node, {'true_value': next_state_value})])
-        return next_state_value
+        return action_value
 
     def update_subtree(self):
         _visited_nodes = [n for n in self.Tree.nodes if self.Tree.nodes[n]['depth'] == self.max_depth]
         if len(_visited_nodes) == 0:
             _max_depth = np.max([self.Tree.nodes[n]['depth'] for n in self.Tree.nodes])
             _visited_nodes = [n for n in self.Tree.nodes if self.Tree.nodes[n]['depth'] == _max_depth]
+            self.current_max_depth = _max_depth
+        else:
+            self.current_max_depth = self.max_depth
 
         _children_nodes = _visited_nodes
         while len(_children_nodes) > 0:
@@ -756,14 +755,14 @@ class Tree(object):
         action_nodes = [action_node for action_node in self.KinematicTree.neighbors(state_node) if
                         self.KinematicTree.nodes[action_node]['true_reward'] == 0.]
         print("action length : ", state_node, len([action_node for action_node in self.KinematicTree.neighbors(state_node)]))
-        print("available action length : ",state_node, len(action_nodes))
+        print("available action length : ", state_node, len(action_nodes))
 
         if len(action_nodes) > 0:
             action_values = [self.KinematicTree.nodes[action_node]['true_value'] for action_node in action_nodes]
             action_visits = [self.KinematicTree.nodes[action_node]['visit'] for action_node in action_nodes]
             action_list = [self.KinematicTree.nodes[action_node]['action'] for action_node in action_nodes]
 
-            eps = np.maximum(np.minimum(1., 1 / np.maximum(visit, 1)), 0.01)
+            eps = np.maximum(np.minimum(1., 1 / np.maximum(visit, 1)), 0.1)
             if np.any(['place' in action['type'] for action in action_list]):
                 if self.goal_obj is not None:
                     table_place_indices = [action_idx for action_idx, action in enumerate(action_list) if
@@ -934,8 +933,6 @@ class Tree(object):
                 print("pick planning is done before: ", self.KinematicTree.nodes[selected_action_node]['done'])
                 print("place planning is done before: ", self.KinematicTree.nodes[selected_next_action_node]['done'])
 
-                # while search_idx < len(selected_action["grasp_poses"]):
-                print("search idx : ", search_idx)
                 pick_planning = False
                 place_list = self.KinematicTree.nodes[selected_action_node]['done']
                 if selected_next_action_node not in place_list:
@@ -975,9 +972,6 @@ class Tree(object):
                         place_planning = True
                 if pick_planning and place_planning:
                     done = True
-                    #     break
-                    # else:
-                    #     search_idx += 1
                 if done:
                     if selected_next_action_node not in self.KinematicTree.nodes[selected_action_node]['done']:
                         if 'planned_traj_list' not in self.Tree.nodes[next_state_node]:
@@ -1015,9 +1009,9 @@ class Tree(object):
                         self.Tree.update(nodes=[(selected_next_action_node, {'done': True})])
 
                     new_next_action_value = self.KinematicTree.nodes[next_next_state_node]['true_reward'] + self.kinematic_exploration_v2(next_next_state_node)
-                    # if len([next_next_action_node for next_next_action_node in self.KinematicTree.neighbors(next_next_state_node) if self.KinematicTree.nodes[next_next_action_node]['true_reward'] == 0.]) == 0:
-                    #     self.Tree.update(nodes=[(selected_next_action_node, {'true_reward': -np.inf})])
-                    #     self.Tree.update(nodes=[(selected_next_action_node, {'true_value': -np.inf})])
+                    if len([next_next_action_node for next_next_action_node in self.KinematicTree.neighbors(next_next_state_node) if self.KinematicTree.nodes[next_next_action_node]['true_reward'] == 0.]) == 0:
+                        self.Tree.update(nodes=[(selected_next_action_node, {'true_reward': -np.inf})])
+                        self.Tree.update(nodes=[(selected_next_action_node, {'true_value': -np.inf})])
 
                     if selected_next_action_value < new_next_action_value:
                         selected_next_action_value = new_next_action_value
@@ -1050,6 +1044,91 @@ class Tree(object):
                 return -np.inf
         else:
             print("There is no possible pick action")
+            return 0.
+
+    def kinematic_exploration_v3(self, state_node=0):
+        depth = self.KinematicTree.nodes[state_node]['depth']
+        visit = self.KinematicTree.nodes[state_node]['true_visit']
+        state_value = self.KinematicTree.nodes[state_node]['true_value']
+        obj_list = self.KinematicTree.nodes[state_node]['state']
+        left_joint_values = self.KinematicTree.nodes[state_node]['left_joint_values']
+        left_gripper_width = self.KinematicTree.nodes[state_node]['left_gripper_width']
+        right_joint_values = self.KinematicTree.nodes[state_node]['right_joint_values']
+        right_gripper_width = self.KinematicTree.nodes[state_node]['right_gripper_width']
+        self.Tree.update(nodes=[(state_node, {'true_visit': visit + 1})])
+
+        action_nodes = [action_node for action_node in self.KinematicTree.neighbors(state_node) if not np.isinf(self.KinematicTree.nodes[action_node]['true_reward'])]
+        action_values = [self.KinematicTree.nodes[action_node]['true_value'] for action_node in action_nodes]
+        action_visits = [self.KinematicTree.nodes[action_node]['true_visit'] for action_node in action_nodes]
+        action_list = [self.KinematicTree.nodes[action_node]['action'] for action_node in action_nodes]
+        print("============= Action node information ============")
+        print(depth, "/", self.max_depth, "state node :", state_node)
+        print(depth, "/", self.max_depth, "possible actions / total actions :", len(action_nodes), len([action_node for action_node in self.KinematicTree.neighbors(state_node)]))
+        if len(action_nodes) > 0:
+            selected_idx = sampler(self.exploration_method, action_values, action_visits, depth, eps=0.1)
+            selected_action_node = action_nodes[selected_idx]
+            selected_action_value = action_values[selected_idx]
+            selected_action_visit = action_visits[selected_idx]
+            selected_action = action_list[selected_idx]
+            self.Tree.update(nodes=[(selected_action_node, {'true_visit': selected_action_visit + 1})])
+            print("============= Selected action node information ============")
+            print(depth, "/", self.max_depth, "selected action node :", selected_action_node)
+            print(depth, "/", self.max_depth, selected_action['type'], selected_action['param'])
+
+            next_state_nodes = [node for node in self.KinematicTree.neighbors(selected_action_node)]
+            if len(next_state_nodes) > 0:
+                next_state_node = next_state_nodes[0]
+                next_visit = self.KinematicTree.nodes[next_state_node]['true_visit']
+                next_object_list = self.KinematicTree.nodes[next_state_node]['state']
+                self.Tree.update(nodes=[(next_state_node, {'true_visit': next_visit + 1})])
+                kinematic_planning_flag = False
+                new_next_object_list = None
+                if not self.KinematicTree.nodes[selected_action_node]['done']:
+                    new_next_object_list, next_left_joint_values, next_left_gripper_width, next_right_joint_values, next_right_gripper_width, planned_traj_list = \
+                        kinematic_planning(obj_list, next_object_list,
+                                           left_joint_values, left_gripper_width,
+                                           right_joint_values, right_gripper_width,
+                                           selected_action, self.meshes,
+                                           _get_planning_scene_proxy=self.get_planning_scene_proxy,
+                                           _apply_planning_scene_proxy=self.apply_planning_scene_proxy,
+                                           _cartesian_planning_with_gripper_pose_proxy=self.cartesian_planning_with_gripper_pose_proxy,
+                                           _planning_with_gripper_pose_proxy=self.planning_with_gripper_pose_proxy,
+                                           _planning_with_arm_joints_proxy=self.planning_with_arm_joints_proxy,
+                                           _compute_fk_proxy=self.compute_fk_proxy)
+                    if new_next_object_list is not None:
+                        kinematic_planning_flag = True
+                else:
+                    kinematic_planning_flag = True
+
+                if kinematic_planning_flag:
+                    if new_next_object_list is not None:
+                        self.Tree.update(nodes=[(next_state_node, {'left_joint_values': next_left_joint_values})])
+                        self.Tree.update(nodes=[(next_state_node, {'left_gripper_width': next_left_gripper_width})])
+                        self.Tree.update(nodes=[(next_state_node, {'right_joint_values': next_right_joint_values})])
+                        self.Tree.update(nodes=[(next_state_node, {'right_gripper_width': next_right_gripper_width})])
+                        self.Tree.update(nodes=[(next_state_node, {'planned_traj_list': planned_traj_list})])
+                        self.Tree.update(nodes=[(selected_action_node, {'done': True})])
+
+                    new_action_value = self.KinematicTree.nodes[next_state_node]['true_reward'] + self.kinematic_exploration_v3(next_state_node)
+                    if selected_action_value < new_action_value:
+                        selected_action_value = new_action_value
+                        self.Tree.update(nodes=[(selected_action_node, {'true_value': selected_action_value})])
+
+                    if state_value < new_action_value:
+                        state_value = new_action_value
+                        self.Tree.update(nodes=[(state_node, {'true_value': state_value})])
+                    return state_value
+                else:
+                    print("planning fails")
+                    self.Tree.update(nodes=[(selected_action_node, {'true_reward': -np.inf})])
+                    self.Tree.update(nodes=[(selected_action_node, {'true_value': -np.inf})])
+                    return -np.inf
+            else:
+                print("there is no next state node")
+                self.Tree.update(nodes=[(selected_action_node, {'true_reward': -np.inf})])
+                self.Tree.update(nodes=[(selected_action_node, {'true_value': -np.inf})])
+                return -np.inf
+        else:
             return 0.
 
     def get_best_path(self, start_node=0):

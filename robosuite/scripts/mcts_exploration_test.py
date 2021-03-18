@@ -3,7 +3,7 @@ import glfw
 
 from mujoco_py import MjSim, MjViewer
 
-from robosuite.mcts.tree_search import *
+from robosuite.mcts.tree_search_v2 import *
 from robosuite.models.base import MujocoXML
 from robosuite.models.objects import MujocoXMLObject
 from robosuite.utils import transform_utils as T
@@ -86,12 +86,15 @@ def do_physical_simulation(_sim, _object_list, _action, _next_object_list, _view
 if __name__ == "__main__":
     goal_name_list = ['stack_easy', 'stack_hard', 'tower_goal', 'twin_tower_goal']
     area_ths_list = [1., 1., 0.003, 0.003]
-    exploration_list = [{'method': 'bai_perturb', 'param': 1.},
+    exploration_list = [{'method': 'bai_perturb', 'param': 1e-1},
+                        {'method': 'bai_perturb', 'param': 1.},
                         {'method': 'bai_perturb', 'param': 10.},
                         {'method': 'bai_perturb', 'param': 100.},
+                        {'method': 'ucb', 'param': 1e-1},
                         {'method': 'ucb', 'param': 1.},
                         {'method': 'ucb', 'param': 10.},
                         {'method': 'ucb', 'param': 100.},
+                        {'method': 'bai_ucb', 'param': 1e-1},
                         {'method': 'bai_ucb', 'param': 1.},
                         {'method': 'bai_ucb', 'param': 10.},
                         {'method': 'bai_ucb', 'param': 100.},
@@ -105,7 +108,7 @@ if __name__ == "__main__":
 
         print('Problem : {}'.format(goal_name))
         n_seed = 10
-        opt_num = 200
+        opt_num = 300
 
         for exploration in exploration_list:
             print("Exploration method : ", exploration)
@@ -205,7 +208,7 @@ if __name__ == "__main__":
                     mis_placed_obj_list, sim_object_list = do_physical_simulation(sim, object_list, action,
                                                                                   next_object_list,
                                                                                   # _viewer=viewer,
-                                                                                  test_horizon=10000)
+                                                                                  test_horizon=30000)
 
                     print(seed, action['type'], action['param'], path_idx, len(optimized_path))
                     if len(mis_placed_obj_list) > 0:

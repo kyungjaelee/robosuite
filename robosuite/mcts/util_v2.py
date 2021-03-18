@@ -23,8 +23,8 @@ try:
 except ModuleNotFoundError:
     print("ROS dependency errors. Robot path planning will be unable.")
 
-# from robosuite.mcts.transforms import *
-from robosuite.utils import transform_utils as tf
+import robosuite.mcts.transforms as tf
+# from robosuite.utils import transform_utils as tf
 
 from matplotlib import pyplot as plt
 
@@ -95,6 +95,34 @@ def get_meshes(_mesh_types=None, _mesh_files=None, _mesh_units=None, _area_ths=0
         _meshes.append(mesh)
         _contact_faces.append(faces)
         _contact_points.append(points)
+
+    gripper_mesh_files = ['/home/kj/robosuite/robosuite/models/assets/grippers/meshes/rethink_gripper/standard_narrow.stl',
+                          '/home/kj/robosuite/robosuite/models/assets/grippers/meshes/rethink_gripper/half_round_tip.stl',
+                          '/home/kj/robosuite/robosuite/models/assets/grippers/meshes/rethink_gripper/standard_narrow.stl',
+                          '/home/kj/robosuite/robosuite/models/assets/grippers/meshes/rethink_gripper/half_round_tip.stl',
+                          '/home/kj/robosuite/robosuite/models/assets/grippers/meshes/rethink_gripper/connector_plate.stl',
+                          '/home/kj/robosuite/robosuite/models/assets/grippers/meshes/rethink_gripper/electric_gripper_base.stl']
+
+    gripper_mesh_relative_poses = [{'position': [0, 0.01 + 0.010833, 0.0444 - 0.12255859], 'quat': [0, 0, -1, 0]},
+                                   {'position': [0, 0.01 + 0.01725 + 0.010833, 0.0444 + 0.075 - 0.12255859], 'quat': [0, 0, -1, 0]},
+                                   {'position': [0, -0.01 - 0.010833, 0.0444 - 0.12255859], 'quat': [0, 0, 0, 1]},
+                                   {'position': [0, -0.01 - 0.01725 - 0.010833, 0.0444 + 0.075 - 0.12255859], 'quat': [0, 0, 0, 1]},
+                                   {'position': [0, 0, 0.0018 - 0.12255859], 'quat': [0, 0, 0, 1]},
+                                   {'position': [0, 0, 0.0194 - 0.12255859], 'quat': [0, 0, 0, 1]}]
+
+    _gripper_mesh = None
+    for mesh_file, rel_pose in zip(gripper_mesh_files, gripper_mesh_relative_poses):
+        _gripper_component_mesh = trimesh.load(mesh_file)
+        pose = tf.quaternion_matrix(rel_pose['quat'])
+        pose[:3, 3] = rel_pose['position']
+        _gripper_component_mesh.apply_transform(pose)
+        if _gripper_mesh is None:
+            _gripper_mesh = _gripper_component_mesh
+        else:
+            _gripper_mesh = trimesh.util.concatenate(_gripper_mesh, _gripper_component_mesh)
+
+    _mesh_types.append('left_gripper')
+    _meshes.append(_gripper_mesh)
 
     return _mesh_types, _mesh_files, _mesh_units, _meshes, _rotation_types, _contact_faces, _contact_points
 
@@ -218,7 +246,7 @@ def rotation_matrix_from_y_x(y_axis):
 
 
 def transform_matrix2pose(pose_mtx):
-    q = tf.mat2quat(pose_mtx)
+    q = tf.quaternion_from_matrix(pose_mtx)
     orientation = Quaternion(x=q[0], y=q[1], z=q[2], w=q[3])
     position = Point(x=pose_mtx[0, 3], y=pose_mtx[1, 3], z=pose_mtx[2, 3])
     pose = Pose(position, orientation)
@@ -232,7 +260,7 @@ def pose2transform_matrix(pose):
 
     q = [orientation.x, orientation.y, orientation.z, orientation.w]
     pose_mtx = np.eye(4)
-    pose_mtx[:3, :3] = tf.quat2mat(q)
+    pose_mtx[:3, :3] = tf.quaternion_matrix(q)[:3,:3]
     pose_mtx[0, 3] = position.x
     pose_mtx[1, 3] = position.y
     pose_mtx[2, 3] = position.z
@@ -240,7 +268,7 @@ def pose2transform_matrix(pose):
     return pose_mtx
 
 
-def get_grasp_pose(_mesh_idx1, _pnt1, _normal1, _rotation1, _pose1, _meshes):
+def get_grasp_pose(_mesh_idx1, _pnt1, _normal1, _rotation1, _pose1, _meshes, _coll_mngr):
     mesh1 = _meshes[_mesh_idx1]
     locations, index_ray, index_tri = mesh1.ray.intersects_location(
         ray_origins=[_pnt1 - 1e-5 * _normal1],
@@ -261,13 +289,16 @@ def get_grasp_pose(_mesh_idx1, _pnt1, _normal1, _rotation1, _pose1, _meshes):
     t_retreat[:3, 3] = _pnt_center - 15e-2 * approaching_dir
     hand_t_grasp = _pose1.dot(t_grasp)
     hand_t_retreat = _pose1.dot(t_retreat)
-    if hand_t_grasp[2, 2] < -0.99 and gripper_width < 0.04:
-        return hand_t_grasp, hand_t_retreat, gripper_width
-    else:
-        return None, None, None
+    _coll_mngr.set_transform('left_gripper', hand_t_retreat)
+    if not _coll_mngr.in_collision_internal():
+        _coll_mngr.set_transform('left_gripper', hand_t_grasp)
+        if not _coll_mngr.in_collision_internal():
+            return hand_t_grasp, hand_t_retreat, gripper_width
+
+    return None, None, None
 
 
-def get_on_pose(_name1, _pnt1, _normal1, _rotation1, _pnt2, _normal2, _pose2, _coll_mngr):
+def get_on_pose(_name1, _pnt1, _normal1, _rotation1, _pnt2, _normal2, _pose2, _coll_mngr, _rel_gripper=None):
     target_pnt = _pnt1 + 1e-6 * _normal1
     T_target = rotation_matrix_from_z_x(-_normal1).dot(rotation_matrix([0, 0, 1], _rotation1))
     T_target[:3, 3] = target_pnt
@@ -277,6 +308,16 @@ def get_on_pose(_name1, _pnt1, _normal1, _rotation1, _pnt2, _normal2, _pose2, _c
 
     _T1 = _pose2.dot(T_source.dot(np.linalg.inv(T_target)))
     _coll_mngr.set_transform(_name1, _T1)
+    # print(visual)
+    # if visual:
+    #     obj_idx = get_obj_idx_by_name(tmp_object_list, _name1)
+    #     tmp_object_list[-1].pose = _T1.dot(_rel_gripper)
+    #     tmp_object_list[obj_idx].pose = _T1
+    #     visualize(tmp_object_list, _meshes)
+    if _rel_gripper is not None:
+        _new_gripper = _T1.dot(_rel_gripper)
+        _coll_mngr.set_transform('left_gripper', _new_gripper)
+
     if not _coll_mngr.in_collision_internal():
         return _T1
     else:
@@ -295,7 +336,7 @@ def configuration_initializer(_mesh_types, _meshes, _mesh_units, _rotation_types
     elif 'box_goal' is goal_name:
         n_obj_per_mesh_types = [0, 2, 4, 0, 0, 0, 0, 0, 0, 0]
     elif 'stack_easy' is goal_name:
-        n_obj_per_mesh_types = [0, 1, 2, 0, 0, 0, 0, 0, 0, 0]
+        n_obj_per_mesh_types = [0, 2, 2, 0, 0, 0, 0, 0, 0, 0]
     elif 'stack_hard' is goal_name:
         n_obj_per_mesh_types = [0, 1, 1, 1, 1, 0, 0, 0, 0, 0]
     elif 'regular_shapes' is goal_name:
@@ -401,9 +442,9 @@ def configuration_initializer(_mesh_types, _meshes, _mesh_units, _rotation_types
                                             table_T, _coll_mngr)
                         if pose1 is not None:
                             min_dist1 = np.min([np.sqrt(np.sum(np.square(tmp_obj.pose[:3, 3] - pose1[:3, 3]))) for tmp_obj in _object_list if tmp_obj.name not in new_obj.name])
-                            if min_dist1 > 0.1:
+                            if min_dist1 > 0.13:
                                 pose1_list.append(pose1)
-            print(new_obj.name, len(pose1_list))
+            # print(new_obj.name, len(pose1_list))
             if len(pose1_list) > 0:
                 init_pose_idx = np.random.choice(len(pose1_list), 1)[0]
                 new_obj.pose = pose1_list[init_pose_idx]
@@ -417,6 +458,16 @@ def configuration_initializer(_mesh_types, _meshes, _mesh_units, _rotation_types
                                          + transform_g_t[:3, 3]
         _contact_faces[table_mesh_idx] = _contact_faces[table_mesh_idx][:len(_contact_faces[goal_mesh_idx])]
         # this is the most tricky part...
+
+    gripper_mesh_idx = _mesh_types.index('left_gripper')
+
+    _coll_mngr.add_object('left_gripper', _meshes[gripper_mesh_idx])
+    gripper_pose = deepcopy(table_T)
+    gripper_pose[2,3] += 0.5
+    _coll_mngr.set_transform('left_gripper', gripper_pose)
+
+    _gripper_obj = Object('left_gripper', gripper_mesh_idx, gripper_pose, {'left_gripper': []})
+    _object_list.append(_gripper_obj)
     return _object_list, _goal_obj, _contact_points, _contact_faces, _coll_mngr, table_spawn_position, \
            table_spawn_bnd_size, n_obj_per_mesh_types
 
@@ -458,12 +509,12 @@ def get_image(object_list, action, next_object_list, meshes, label=None, do_visu
     camera_pose1 = np.eye(4)
     camera_pose2 = np.eye(4)
 
-    camera_pose1[:3, :3] = tf.euler2mat([1.9 * np.pi / 4., 0., 0.])
+    camera_pose1[:3, :3] = tf.euler_matrix(1.9 * np.pi / 4., 0., 0.)[:3,:3]
     camera_pose1[:3, 3] = place_translation
     camera_pose1[1, 3] -= 0.2
     camera_pose1[2, 3] += 0.05
 
-    camera_pose2[:3, :3] = tf.euler2mat([0., 1.9 * np.pi / 4., np.pi / 2.])
+    camera_pose2[:3, :3] = tf.euler_matrix(1.9 * np.pi / 4., 0., np.pi / 2.)[:3,:3]
     camera_pose2[:3, 3] = place_translation
     camera_pose2[0, 3] += 0.2
     camera_pose2[2, 3] += 0.05
@@ -637,7 +688,7 @@ def get_possible_actions_with_robot(_object_list, _meshes, _coll_mngr, _contact_
             obj2_contact_indices, = np.where(obj2_contact_normals_world[:, 2] < 0.)
 
         for obj1 in _object_list:
-            if "held" not in obj1.logical_state:
+            if "held" not in obj1.logical_state and 'gripper' not in obj1.name:
                 obj1_mesh_idx = obj1.mesh_idx
                 obj1_contact_points = _contact_points[obj1_mesh_idx]
                 obj1_contact_normals = _meshes[obj1_mesh_idx].face_normals[_contact_faces[obj1_mesh_idx]]
@@ -671,7 +722,7 @@ def get_possible_actions_v2(_object_list, _meshes, _coll_mngr, _contact_points, 
     if all(["held" not in obj.logical_state for obj in _object_list]):
         for obj1 in _object_list:
             if "support" not in obj1.logical_state and "static" not in obj1.logical_state and \
-                    "done" not in obj1.logical_state and "goal" not in obj1.name:
+                    "done" not in obj1.logical_state and "goal" not in obj1.name and 'gripper' not in obj1.name:
                 obj1_mesh_idx = obj1.mesh_idx
                 obj1_pose = obj1.pose
                 obj1_contact_points = _contact_points[obj1_mesh_idx]
@@ -679,22 +730,15 @@ def get_possible_actions_v2(_object_list, _meshes, _coll_mngr, _contact_points, 
 
                 obj1_contact_normals_world = obj1.pose[:3, :3].dot(obj1_contact_normals.T).T
                 obj1_contact_indices, = np.where(np.abs(obj1_contact_normals_world[:, 2]) < 1e-10)
-
-                grasp_poses = []
-                retreat_poses = []
-                gripper_widths = []
                 for i in obj1_contact_indices:
                     for j in range(_rotation_types):
                         pnt1 = obj1_contact_points[i]
                         normal1 = obj1_contact_normals[i]
-                        hand_t_grasp, hand_t_retreat, gripper_width = get_grasp_pose(obj1_mesh_idx, pnt1, normal1, 2. * np.pi * j / _rotation_types, obj1_pose, _meshes)
+                        hand_t_grasp, hand_t_retreat, gripper_width = get_grasp_pose(obj1_mesh_idx, pnt1, normal1, 2. * np.pi * j / _rotation_types, obj1_pose, _meshes, _coll_mngr)
 
                         if hand_t_grasp is not None:
-                            grasp_poses.append(hand_t_grasp)
-                            retreat_poses.append(hand_t_retreat)
-                            gripper_widths.append(gripper_width)
-                _action_list.append({"type": "pick", "param": obj1.name, "search_idx": 0, "grasp_poses": grasp_poses,
-                                     "retreat_poses": retreat_poses, "gripper_widths": gripper_widths})
+                            _action_list.append({"type": "pick", "param": obj1.name, "grasp_pose": hand_t_grasp,
+                                                 "retreat_pose": hand_t_retreat, "gripper_width": gripper_width})
 
     # Check place
     held_obj_idx = get_held_object(_object_list)
@@ -711,14 +755,18 @@ def get_possible_actions_v2(_object_list, _meshes, _coll_mngr, _contact_points, 
         else:
             obj2_contact_indices, = np.where(obj2_contact_normals_world[:, 2] < 0.)
 
+        tmp_object_list = deepcopy(_object_list)
         for obj1 in _object_list:
-            if "held" not in obj1.logical_state:
+            if "held" not in obj1.logical_state and 'gripper' not in obj1.name:
+                # print(obj1.name)
                 obj1_mesh_idx = obj1.mesh_idx
                 obj1_contact_points = _contact_points[obj1_mesh_idx]
                 obj1_contact_normals = _meshes[obj1_mesh_idx].face_normals[_contact_faces[obj1_mesh_idx]]
 
                 obj1_contact_normals_world = obj1.pose[:3, :3].dot(obj1_contact_normals.T).T
                 obj1_contact_indices, = np.where(obj1_contact_normals_world[:, 2] > 0.99)
+
+                _rel_gripper = np.linalg.inv(held_obj.pose).dot(_object_list[-1].pose)
 
                 for i in obj1_contact_indices:
                     for j in range(_rotation_types):
@@ -730,7 +778,7 @@ def get_possible_actions_v2(_object_list, _meshes, _coll_mngr, _contact_points, 
                             normal2 = obj2_contact_normals[k]
 
                             pose = get_on_pose(obj2.name, pnt2, normal2, 2. * np.pi * j / _rotation_types,
-                                               pnt1, normal1, obj1.pose, _coll_mngr)
+                                               pnt1, normal1, obj1.pose, _coll_mngr, _rel_gripper=_rel_gripper)
 
                             if pose is not None:
                                 _action_list.append({"type": "place", "param": obj1.name, "placing_pose": pose})
@@ -741,7 +789,11 @@ def get_transition(_object_list, _action):
     _next_object_list = deepcopy(_object_list)
     if _action["type"] is "pick":
         pick_obj_idx = get_obj_idx_by_name(_next_object_list, _action['param'])
+        new_hand_pose = _action["grasp_pose"]
+        if new_hand_pose is None:
+            return None
 
+        _next_object_list[-1].pose = new_hand_pose
         support_obj_idx = get_obj_idx_by_name(_next_object_list, _next_object_list[pick_obj_idx].logical_state["on"][0])
         _next_object_list[support_obj_idx].logical_state["support"].remove(_next_object_list[pick_obj_idx].name)
 
@@ -756,6 +808,8 @@ def get_transition(_object_list, _action):
         if new_pose is None:
             return None
 
+        rel_gripper = np.linalg.inv(_next_object_list[held_obj_idx].pose).dot(_next_object_list[-1].pose)
+        _next_object_list[-1].pose = new_pose.dot(rel_gripper)
         _next_object_list[held_obj_idx].pose = new_pose
         _next_object_list[held_obj_idx].logical_state.clear()
         _next_object_list[held_obj_idx].logical_state["on"] = [_next_object_list[place_obj_idx].name]
@@ -774,12 +828,14 @@ def get_reward(_obj_list, _action, _goal_obj, _next_obj_list, _meshes):
         if _goal_obj is None:
             obj_height_list = []
             for obj in _obj_list:
-                obj_height_list.append(obj.pose[2, 3])
+                if 'gripper' not in obj.name:
+                    obj_height_list.append(obj.pose[2, 3])
             curr_height = np.max(obj_height_list)
 
             next_obj_height_list = []
             for next_obj in _next_obj_list:
-                next_obj_height_list.append(next_obj.pose[2, 3])
+                if 'gripper' not in next_obj.name:
+                    next_obj_height_list.append(next_obj.pose[2, 3])
             next_height = np.max(next_obj_height_list)
             return next_height - curr_height
         else:
@@ -788,20 +844,21 @@ def get_reward(_obj_list, _action, _goal_obj, _next_obj_list, _meshes):
 
             rew = 0.
             for obj in _obj_list:
-                if "table" not in obj.name:
+                if "table" not in obj.name and 'gripper' not in obj.name:
                     obj_mesh_copied = deepcopy(_meshes[obj.mesh_idx])
                     obj_mesh_copied.apply_transform(obj.pose)
 
                     signed_distance = trimesh.proximity.signed_distance(goal_mesh_copied, obj_mesh_copied.vertices)
-                    rew -= 1 / (1 + 100. * np.max(np.abs(signed_distance)))
-
+                    # print(obj.name , np.max(np.abs(signed_distance)))
+                    rew -= 1 / (1 + 1e3 * np.max(np.abs(signed_distance)))
+            # print("============================================================================")
             for obj in _next_obj_list:
-                if "table" not in obj.name:
+                if "table" not in obj.name and 'gripper' not in obj.name:
                     obj_mesh_copied = deepcopy(_meshes[obj.mesh_idx])
                     obj_mesh_copied.apply_transform(obj.pose)
 
                     signed_distance = trimesh.proximity.signed_distance(goal_mesh_copied, obj_mesh_copied.vertices)
-                    rew += 1 / (1 + 100. * np.max(np.abs(signed_distance)))
+                    rew += 1 / (1 + 1e3 * np.max(np.abs(signed_distance)))
 
             return rew
 
@@ -829,64 +886,65 @@ def synchronize_planning_scene(_left_joint_values, _left_gripper_width, _right_j
                 attached_object_idx].object.operation = CollisionObject.REMOVE
 
     for obj in _object_list:
-        co_idx = None
-        for scene_object_idx in range(len(next_scene.world.collision_objects)):
-            if next_scene.world.collision_objects[scene_object_idx].id in obj.name:
-                co_idx = scene_object_idx
-                break
+        if 'gripper' not in obj.name:
+            co_idx = None
+            for scene_object_idx in range(len(next_scene.world.collision_objects)):
+                if next_scene.world.collision_objects[scene_object_idx].id in obj.name:
+                    co_idx = scene_object_idx
+                    break
 
-        if co_idx is None:
-            co = CollisionObject()
-            co.operation = CollisionObject.ADD
-            co.id = obj.name
-            co.header = next_scene.robot_state.joint_state.header
+            if co_idx is None:
+                co = CollisionObject()
+                co.operation = CollisionObject.ADD
+                co.id = obj.name
+                co.header = next_scene.robot_state.joint_state.header
 
-            mesh = Mesh()
-            for face in _meshes[obj.mesh_idx].faces:
-                triangle = MeshTriangle()
-                triangle.vertex_indices = face
-                mesh.triangles.append(triangle)
+                mesh = Mesh()
+                for face in _meshes[obj.mesh_idx].faces:
+                    triangle = MeshTriangle()
+                    triangle.vertex_indices = face
+                    mesh.triangles.append(triangle)
 
-            for vertex in _meshes[obj.mesh_idx].vertices:
-                point = Point()
-                point.x = vertex[0]
-                point.y = vertex[1]
-                point.z = vertex[2]
-                mesh.vertices.append(point)
-            co.header.frame_id = 'base'
-            co.meshes = [mesh]
-            obj_pose = transform_matrix2pose(obj.pose)
-            obj_pose.position.z -= 0.93
-            co.mesh_poses = [obj_pose]
+                for vertex in _meshes[obj.mesh_idx].vertices:
+                    point = Point()
+                    point.x = vertex[0]
+                    point.y = vertex[1]
+                    point.z = vertex[2]
+                    mesh.vertices.append(point)
+                co.header.frame_id = 'base'
+                co.meshes = [mesh]
+                obj_pose = transform_matrix2pose(obj.pose)
+                obj_pose.position.z -= 0.93
+                co.mesh_poses = [obj_pose]
 
-            if held_obj_idx is not None and len(next_scene.robot_state.attached_collision_objects) == 0 and \
-                    _object_list[held_obj_idx].name is obj.name:
-                aco = AttachedCollisionObject()
-                aco.link_name = 'left_gripper'
-                aco.object = co
-                next_scene.robot_state.attached_collision_objects.append(aco)
-            elif held_obj_idx is not None and len(next_scene.robot_state.attached_collision_objects) > 0 and \
-                    _object_list[held_obj_idx].name is obj.name:
-                continue
+                if held_obj_idx is not None and len(next_scene.robot_state.attached_collision_objects) == 0 and \
+                        _object_list[held_obj_idx].name is obj.name:
+                    aco = AttachedCollisionObject()
+                    aco.link_name = 'left_gripper'
+                    aco.object = co
+                    next_scene.robot_state.attached_collision_objects.append(aco)
+                elif held_obj_idx is not None and len(next_scene.robot_state.attached_collision_objects) > 0 and \
+                        _object_list[held_obj_idx].name is obj.name:
+                    continue
+                else:
+                    next_scene.world.collision_objects.append(co)
+
             else:
-                next_scene.world.collision_objects.append(co)
+                next_scene.world.collision_objects[co_idx].operation = CollisionObject.MOVE
+                next_scene.world.collision_objects[co_idx].header = next_scene.robot_state.joint_state.header
+                obj_pose = transform_matrix2pose(obj.pose)
+                obj_pose.position.z -= 0.93
+                next_scene.world.collision_objects[co_idx].mesh_poses = [obj_pose]
 
-        else:
-            next_scene.world.collision_objects[co_idx].operation = CollisionObject.MOVE
-            next_scene.world.collision_objects[co_idx].header = next_scene.robot_state.joint_state.header
-            obj_pose = transform_matrix2pose(obj.pose)
-            obj_pose.position.z -= 0.93
-            next_scene.world.collision_objects[co_idx].mesh_poses = [obj_pose]
-
-            if held_obj_idx is not None and len(next_scene.robot_state.attached_collision_objects) == 0 and \
-                    _object_list[held_obj_idx].name in obj.name:
-                aco = AttachedCollisionObject()
-                aco.link_name = 'left_gripper'
-                aco.object = deepcopy(next_scene.world.collision_objects[co_idx])
-                aco.object.header.frame_id = 'base'
-                aco.object.operation = CollisionObject.ADD
-                next_scene.robot_state.attached_collision_objects.append(aco)
-                next_scene.world.collision_objects[co_idx].operation = CollisionObject.REMOVE
+                if held_obj_idx is not None and len(next_scene.robot_state.attached_collision_objects) == 0 and \
+                        _object_list[held_obj_idx].name in obj.name:
+                    aco = AttachedCollisionObject()
+                    aco.link_name = 'left_gripper'
+                    aco.object = deepcopy(next_scene.world.collision_objects[co_idx])
+                    aco.object.header.frame_id = 'base'
+                    aco.object.operation = CollisionObject.ADD
+                    next_scene.robot_state.attached_collision_objects.append(aco)
+                    next_scene.world.collision_objects[co_idx].operation = CollisionObject.REMOVE
 
     next_scene.robot_state.joint_state.name = list(next_scene.robot_state.joint_state.name) \
                                               + ['l_gripper_l_finger_joint', 'l_gripper_r_finger_joint']
@@ -954,89 +1012,87 @@ def kinematic_planning(_object_list, _next_object_list,
 
     planned_traj_list = []
     if _action["type"] is "pick":
-        search_idx = _action["search_idx"]
-        if search_idx < len(_action["grasp_poses"]):
-            hand_t_grasp = _action["grasp_poses"][search_idx]
-            hand_t_retreat = _action["retreat_poses"][search_idx]
-            gripper_width = _action["gripper_widths"][search_idx]
+        hand_t_grasp = _action["grasp_pose"]
+        hand_t_retreat = _action["retreat_pose"]
+        gripper_width = _action["gripper_width"]
+
+        req = MoveitPlanningGripperPoseRequest()
+        req.group_name = "left_arm"
+        req.ntrial = 1
+        req.gripper_pose = transform_matrix2pose(hand_t_retreat)
+        req.gripper_pose.position.z -= 0.93
+        req.gripper_link = "left_gripper"
+        resp = _planning_with_gripper_pose_proxy(req)
+        pregrasp_planning_result = resp.success
+        pregrasp_planned_traj = resp.plan
+
+        if pregrasp_planning_result:
+            print("Planning to pregrasp succeeds.")
+            planned_traj_list.append(pregrasp_planned_traj)
+            _after_pregrasp_left_joint_values = dict(zip(pregrasp_planned_traj.joint_names, pregrasp_planned_traj.points[-1].positions))
+            synchronize_planning_scene(_after_pregrasp_left_joint_values, gripper_width, _right_joint_values,
+                                       _right_gripper_width,
+                                       _object_list, _meshes,
+                                       _get_planning_scene_proxy=_get_planning_scene_proxy,
+                                       _apply_planning_scene_proxy=_apply_planning_scene_proxy)
 
             req = MoveitPlanningGripperPoseRequest()
             req.group_name = "left_arm"
-            req.ntrial = 1
-            req.gripper_pose = transform_matrix2pose(hand_t_retreat)
+            req.ntrial = 5
+            req.gripper_pose = transform_matrix2pose(hand_t_grasp)
             req.gripper_pose.position.z -= 0.93
             req.gripper_link = "left_gripper"
-            resp = _planning_with_gripper_pose_proxy(req)
-            pregrasp_planning_result = resp.success
-            pregrasp_planned_traj = resp.plan
-
-            if pregrasp_planning_result:
-                print("Planning to pregrasp succeeds.")
-                planned_traj_list.append(pregrasp_planned_traj)
-                _after_pregrasp_left_joint_values = dict(zip(pregrasp_planned_traj.joint_names, pregrasp_planned_traj.points[-1].positions))
-                synchronize_planning_scene(_after_pregrasp_left_joint_values, gripper_width, _right_joint_values,
+            resp = _cartesian_planning_with_gripper_pose_proxy(req)
+            planning_result = resp.success
+            planned_traj = resp.plan
+            if planning_result:
+                print("Planning to grasp succeeds.")
+                planned_traj_list.append(planned_traj)
+                _after_grasp_left_joint_values = dict(zip(planned_traj.joint_names, planned_traj.points[-1].positions))
+                synchronize_planning_scene(_after_grasp_left_joint_values, gripper_width, _right_joint_values,
                                            _right_gripper_width,
-                                           _object_list, _meshes,
+                                           _next_object_list, _meshes,
                                            _get_planning_scene_proxy=_get_planning_scene_proxy,
                                            _apply_planning_scene_proxy=_apply_planning_scene_proxy)
 
-                req = MoveitPlanningGripperPoseRequest()
+                req = MoveitPlanningJointValuesRequest()
                 req.group_name = "left_arm"
-                req.ntrial = 5
-                req.gripper_pose = transform_matrix2pose(hand_t_grasp)
-                req.gripper_pose.position.z -= 0.93
-                req.gripper_link = "left_gripper"
-                resp = _cartesian_planning_with_gripper_pose_proxy(req)
-                planning_result = resp.success
-                planned_traj = resp.plan
-                if planning_result:
-                    print("Planning to grasp succeeds.")
-                    planned_traj_list.append(planned_traj)
-                    _after_grasp_left_joint_values = dict(zip(planned_traj.joint_names, planned_traj.points[-1].positions))
-                    synchronize_planning_scene(_after_grasp_left_joint_values, gripper_width, _right_joint_values,
+                req.ntrial = 1
+                req.joint_names = list(_init_left_joint_values.keys())
+                req.joint_poses = list(_init_left_joint_values.values())
+
+                resp = _planning_with_arm_joints_proxy(req)
+                retreat_planning_result = resp.success
+                retreat_planned_traj = resp.plan
+
+                if retreat_planning_result:
+                    print("Planning to retreat succeeds.")
+                    planned_traj_list.append(retreat_planned_traj)
+                    _after_retreat_left_joint_values = dict(zip(retreat_planned_traj.joint_names, retreat_planned_traj.points[-1].positions))
+                    synchronize_planning_scene(_after_retreat_left_joint_values, gripper_width, _right_joint_values,
                                                _right_gripper_width,
                                                _next_object_list, _meshes,
                                                _get_planning_scene_proxy=_get_planning_scene_proxy,
                                                _apply_planning_scene_proxy=_apply_planning_scene_proxy)
 
-                    req = MoveitPlanningJointValuesRequest()
-                    req.group_name = "left_arm"
-                    req.ntrial = 1
-                    req.joint_names = list(_init_left_joint_values.keys())
-                    req.joint_poses = list(_init_left_joint_values.values())
+                    resp = _get_planning_scene_proxy(GetPlanningSceneRequest())
+                    current_scene = resp.scene
+                    rel_obj_pose = current_scene.robot_state.attached_collision_objects[0].object.mesh_poses[0]
+                    rel_T = pose2transform_matrix(rel_obj_pose)
 
-                    resp = _planning_with_arm_joints_proxy(req)
-                    retreat_planning_result = resp.success
-                    retreat_planned_traj = resp.plan
+                    req = GetPositionFKRequest()
+                    req.fk_link_names = ['left_gripper']
+                    req.header.frame_id = 'world'
+                    req.robot_state = current_scene.robot_state
+                    resp = _compute_fk_proxy(req)
 
-                    if retreat_planning_result:
-                        print("Planning to retreat succeeds.")
-                        planned_traj_list.append(retreat_planned_traj)
-                        _after_retreat_left_joint_values = dict(zip(retreat_planned_traj.joint_names, retreat_planned_traj.points[-1].positions))
-                        synchronize_planning_scene(_after_retreat_left_joint_values, gripper_width, _right_joint_values,
-                                                   _right_gripper_width,
-                                                   _next_object_list, _meshes,
-                                                   _get_planning_scene_proxy=_get_planning_scene_proxy,
-                                                   _apply_planning_scene_proxy=_apply_planning_scene_proxy)
+                    gripper_T = pose2transform_matrix(resp.pose_stamped[0].pose)
+                    gripper_T[2, 3] += 0.93
+                    pick_obj_idx = get_obj_idx_by_name(_object_list, _action['param'])
+                    new_next_object_list = deepcopy(_next_object_list)
+                    new_next_object_list[pick_obj_idx].pose = gripper_T.dot(rel_T)
 
-                        resp = _get_planning_scene_proxy(GetPlanningSceneRequest())
-                        current_scene = resp.scene
-                        rel_obj_pose = current_scene.robot_state.attached_collision_objects[0].object.mesh_poses[0]
-                        rel_T = pose2transform_matrix(rel_obj_pose)
-
-                        req = GetPositionFKRequest()
-                        req.fk_link_names = ['left_gripper']
-                        req.header.frame_id = 'world'
-                        req.robot_state = current_scene.robot_state
-                        resp = _compute_fk_proxy(req)
-
-                        gripper_T = pose2transform_matrix(resp.pose_stamped[0].pose)
-                        gripper_T[2, 3] += 0.93
-                        pick_obj_idx = get_obj_idx_by_name(_object_list, _action['param'])
-                        new_next_object_list = deepcopy(_next_object_list)
-                        new_next_object_list[pick_obj_idx].pose = gripper_T.dot(rel_T)
-
-                        return new_next_object_list, _after_retreat_left_joint_values, gripper_width, _right_joint_values, _right_gripper_width, planned_traj_list
+                    return new_next_object_list, _after_retreat_left_joint_values, gripper_width, _right_joint_values, _right_gripper_width, planned_traj_list
 
     if _action["type"] is "place":
         held_obj_idx = get_held_object(_object_list)
@@ -1325,7 +1381,7 @@ def get_transition_with_robot(_object_list,
 
 if __name__ == '__main__':
 
-    planning_without_robot = False
+    planning_without_robot = True
     check_meshes = True
 
     if planning_without_robot:
@@ -1355,7 +1411,7 @@ if __name__ == '__main__':
         #     configuration_initializer(mesh_types, meshes, rotation_types, contact_faces, contact_points, goal_name='stack_difficult')
         # visualize(initial_object_list, meshes, _goal_obj=goal_obj)
 
-        action_list = get_possible_actions(initial_object_list, meshes, coll_mngr,
+        action_list = get_possible_actions_v2(initial_object_list, meshes, coll_mngr,
                                            contact_points, contact_faces, rotation_types)
         print(len(action_list))
         action = action_list[0]
@@ -1365,7 +1421,7 @@ if __name__ == '__main__':
         if check_meshes:
             visualize(object_list, meshes, _goal_obj=goal_obj)
 
-        action_list = get_possible_actions(object_list, meshes, coll_mngr,
+        action_list = get_possible_actions_v2(object_list, meshes, coll_mngr,
                                            contact_points, contact_faces, rotation_types)
         print(len(action_list))
         action = action_list[0]

@@ -10,6 +10,7 @@ from torch.utils.data import DataLoader
 from robosuite.mcts.resnet import ResNet, BasicBlock, Bottleneck
 from robosuite.mcts.inception import Inceptionv4
 
+
 class TransitionDataset(Dataset):
     def __init__(self, data_root_prefix='robosuite/data/img_data', num_data_per_file=128, total_file=234):
         self.total_file = total_file
@@ -46,39 +47,6 @@ class TransitionDataset(Dataset):
                 np.asarray([mask1], np.float32),
                 np.asarray([mask2], np.float32),
                 np.asarray(label, np.long))
-
-# class TransitionDataset(Dataset):
-#     def __init__(self, data_root='robosuite/data/img_data.pkl'):
-#         self.samples = []
-#         self.succ_rate = 0
-#         self.total_num = 0
-#
-#         with open(data_root, 'rb') as f:
-#             data = pickle.load(f)
-#             depth1_list = data['depth1_list']
-#             depth2_list = data['depth2_list']
-#             mask1_list = data['mask1_list']
-#             mask2_list = data['mask2_list']
-#             label_list = data['label']
-#
-#         print("Dataset statistics")
-#         print("Number of data : {}".format(len(label_list)))
-#         print("True labeled data: {}".format(np.mean(label_list)))
-#
-#         self.total_num = len(label_list)
-#         for depth1, depth2, mask1, mask2, label in zip(depth1_list, depth2_list, mask1_list, mask2_list, label_list):
-#             self.samples.append((np.asarray(depth1),
-#                                  np.asarray(depth2),
-#                                  np.asarray([mask1], np.float32),
-#                                  np.asarray([mask2], np.float32),
-#                                  np.asarray(label, np.long)))
-#             self.succ_rate += float(label) / self.total_num
-#
-#     def __len__(self):
-#         return len(self.samples)
-#
-#     def __getitem__(self, idx):
-#         return self.samples[idx]
 
 
 if __name__ == "__main__":
