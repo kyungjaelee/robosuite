@@ -371,7 +371,7 @@ from matplotlib import pyplot as plt
 #     return next_object_list, next_left_arm_joint_values, next_left_gripper_width, next_right_arm_joint_values, next_right_gripper_width, planning_results, planned_trajs, planned_gripper_widths
 
 
-def check_stability(obj_idx, object_list, meshes, com1, volume1, margin=0.015):
+def check_stability(obj_idx, object_list, meshes, com1, volume1, margin=0.005):
     if "on" in object_list[obj_idx].logical_state:
         obj_name = object_list[obj_idx].logical_state["on"][0]
         support_obj_idx = get_obj_idx_by_name(object_list, obj_name)
@@ -556,11 +556,15 @@ class Tree(object):
         if depth < self.max_depth:
             obj_list = self.Tree.nodes[state_node]['state']
             action_nodes = [action_node for action_node in self.Tree.neighbors(state_node) if self.Tree.nodes[action_node]['reward'] == 0.]
+            left_joint_values = self.Tree.nodes[state_node]['left_joint_values']
+            left_gripper_width = self.Tree.nodes[state_node]['left_gripper_width']
+            right_joint_values = self.Tree.nodes[state_node]['right_joint_values']
+            right_gripper_width = self.Tree.nodes[state_node]['right_gripper_width']
             if obj_list is None:
                 return 0.0
             elif len(action_nodes) == 0:
                 action_list = get_possible_actions_v3(obj_list, self.meshes, self.coll_mngr,
-                                                   self.contact_points, self.contact_faces, self.rotation_types, side_place_flag=self.side_place_flag)
+                                                   self.contact_points, self.contact_faces, self.rotation_types, side_place_flag=self.side_place_flag,goal_obj=self.goal_obj)
                 if len(action_list) == 0:
                     return 0.0
                 else:
@@ -572,12 +576,13 @@ class Tree(object):
                                                   'state': obj_list,
                                                   'action': action,
                                                   'reward': 0.,
-                                                  'true_reward': 0.,
                                                   'value': -np.inf,
-                                                  'true_value': -np.inf,
                                                   'done': False,
                                                   'visit': 0,
-                                                  'true_visit': 0})])
+                                                  'left_joint_values': left_joint_values,
+                                                  'left_gripper_width': left_gripper_width,
+                                                  'right_joint_values': right_joint_values,
+                                                  'right_gripper_width': right_gripper_width})])
                         self.Tree.add_edge(state_node, child_action_node)
                     action_nodes = [action_node for action_node in self.Tree.neighbors(state_node)]
 
@@ -597,7 +602,6 @@ class Tree(object):
                 else:
                     non_table_place_indices = [action_idx for action_idx, action in enumerate(action_list) if
                                                'table' not in action['param']]
-                    # print([action['param'] for action in action_list])
                     if len(non_table_place_indices) > 0:
                         selected_idx = sampler(self.exploration_method, action_values, action_visits, depth, _indices=non_table_place_indices, eps=eps)
                     else:
@@ -622,6 +626,10 @@ class Tree(object):
         action_value = self.Tree.nodes[action_node]['value']
         depth = self.Tree.nodes[action_node]['depth']
         visit = self.Tree.nodes[action_node]['visit']
+        left_joint_values = self.Tree.nodes[action_node]['left_joint_values']
+        left_gripper_width = self.Tree.nodes[action_node]['left_gripper_width']
+        right_joint_values = self.Tree.nodes[action_node]['right_joint_values']
+        right_gripper_width = self.Tree.nodes[action_node]['right_gripper_width']
         self.Tree.update(nodes=[(action_node, {'visit': visit + 1})])
 
         next_state_nodes = [node for node in self.Tree.neighbors(action_node)]
@@ -633,20 +641,34 @@ class Tree(object):
                 else:
                     physical_demonstratablity = True
                 if physical_demonstratablity:
-                    rew = get_reward(obj_list, action, self.goal_obj, next_obj_list, self.meshes)
+                    next_obj_list, next_left_joint_values, next_left_gripper_width, next_right_joint_values, next_right_gripper_width, planned_traj_list = \
+                        kinematic_planning(obj_list, next_obj_list,
+                                           left_joint_values, left_gripper_width,
+                                           right_joint_values, right_gripper_width,
+                                           action, self.meshes,
+                                           _get_planning_scene_proxy=self.get_planning_scene_proxy,
+                                           _apply_planning_scene_proxy=self.apply_planning_scene_proxy,
+                                           _cartesian_planning_with_gripper_pose_proxy=self.cartesian_planning_with_gripper_pose_proxy,
+                                           _planning_with_gripper_pose_proxy=self.planning_with_gripper_pose_proxy,
+                                           _planning_with_arm_joints_proxy=self.planning_with_arm_joints_proxy,
+                                           _compute_fk_proxy=self.compute_fk_proxy)
+                    if next_obj_list is not None:
+                        rew = get_reward(obj_list, action, self.goal_obj, next_obj_list, self.meshes)
 
-                    child_node = self.Tree.number_of_nodes()
-                    self.Tree.add_node(child_node)
-                    self.Tree.update(nodes=[(child_node,
-                                             {'depth': depth + 1,
-                                              'state': next_obj_list,
-                                              'reward': rew,
-                                              'true_reward': rew,
-                                              'value': -np.inf,
-                                              'true_value': -np.inf,
-                                              'visit': 0,
-                                              'true_visit': 0})])
-                    self.Tree.add_edge(action_node, child_node)
+                        child_node = self.Tree.number_of_nodes()
+                        self.Tree.add_node(child_node)
+                        self.Tree.update(nodes=[(child_node,
+                                                 {'depth': depth + 1,
+                                                  'state': next_obj_list,
+                                                  'reward': rew,
+                                                  'value': -np.inf,
+                                                  'visit': 0,
+                                                  'left_joint_values': next_left_joint_values,
+                                                  'left_gripper_width': next_left_gripper_width,
+                                                  'right_joint_values': next_right_joint_values,
+                                                  'right_gripper_width': next_right_gripper_width,
+                                                  'planned_traj_list': planned_traj_list})])
+                        self.Tree.add_edge(action_node, child_node)
             next_state_nodes = [node for node in self.Tree.neighbors(action_node)]
             # print(depth, self.max_depth, action['type'], action['param'], len(next_state_nodes))
 
