@@ -1131,6 +1131,7 @@ class Tree(object):
                 bbox=dict(facecolor="skyblue", edgecolor='black', boxstyle='round,pad=0.2'))
         plt.show()
 
+
     def visualize_tree(self, visited_tree):
         labels = {
             n: 'depth:{:d}\nvisit:{:d}\nreward:{:.4f}\nvalue:{:.4f}'.format(visited_tree.nodes[n]['depth'], visited_tree.nodes[n]['visit'], visited_tree.nodes[n]['reward'], visited_tree.nodes[n]['value'])

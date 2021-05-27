@@ -162,17 +162,6 @@ if __name__ == "__main__":
     opt_num = 30
     best_value = -np.inf
     opt_idx = 0
-    # branching_factor = False
-
-    # while opt_idx < opt_num:
-    #     mcts.exploration(0)
-    #     if best_value < mcts.Tree.nodes[0]['value']:
-    #         best_value = mcts.Tree.nodes[0]['value']
-    #         print(opt_idx, best_value)
-    #     if (opt_idx + 1) % 5 == 0:
-    #         print('============={}/{}============='.format(opt_idx, opt_num))
-    #
-    #     opt_idx += 1
 
     mcts.exhaustive_search(state_node=0)
     mcts.visualize()
@@ -191,16 +180,7 @@ if __name__ == "__main__":
     print(paths)
     print(values)
 
-    # mcts.update_subtree()
-    # print(mcts.num_kinematic_leaves, "number of leaves are found")
-    # print(mcts.KinematicTree.number_of_edges(), "number of edges in kinematic tree")
-    # for opt_idx in range(20):
-    #     value = mcts.kinematic_exploration_v3(0)
-    #     print(opt_idx, value)
-    #
-    # kinematic_best_path_indices = mcts.get_best_kinematic_path(0)
-    # print(len(kinematic_best_path_indices), kinematic_best_path_indices)
-
+    # Do dynamic simulation in MuJoCo
     arena_model = MujocoXML(xml_path_completion("arenas/empty_arena.xml"))
 
     # load baxter model

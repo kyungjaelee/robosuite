@@ -284,7 +284,7 @@ if __name__ == "__main__":
     init_pose = np.array([init_right_joint_values[right_joint_name] for right_joint_name in ARM_JOINT_NAME[:7]] + [init_left_joint_values[left_joint_name] for left_joint_name in ARM_JOINT_NAME[7:]])
     path_idx = 0
     ctrl_timeout = 30000
-    record_period = 500
+    record_period = 2500
     video_frames = []
     while path_idx < len(kinematic_best_path_indices)-2 and len(kinematic_best_path_indices) > 1:
         state_node = kinematic_best_path_indices[path_idx]

@@ -848,7 +848,7 @@ def kinematic_planning(_object_list, _next_object_list,
 
                     resp = _get_planning_scene_proxy(GetPlanningSceneRequest())
                     current_scene = resp.scene
-                    rel_obj_pose = current_scene.robot_state.attached_collision_objects[0].object.mesh_poses[0]
+                    rel_obj_pose = deepcopy(current_scene.robot_state.attached_collision_objects[0].object.mesh_poses[0])
                     rel_T = pose2transform_matrix(rel_obj_pose)
 
                     req = GetPositionFKRequest()
@@ -872,13 +872,13 @@ def kinematic_planning(_object_list, _next_object_list,
 
         resp = _get_planning_scene_proxy(GetPlanningSceneRequest())
         current_scene = resp.scene
-        rel_obj_pose = current_scene.robot_state.attached_collision_objects[0].object.mesh_poses[0]
+        rel_obj_pose = deepcopy(current_scene.robot_state.attached_collision_objects[0].object.mesh_poses[0])
         rel_T = pose2transform_matrix(rel_obj_pose)
 
         # rel_gripper = np.linalg.inv(_next_object_list[held_obj_idx].pose).dot(_next_object_list[gripper_obj_idx].pose)
 
         place_pose = _action["placing_poses"][-1]
-        gripper_pose = place_pose.dot(np.linalg.inv(rel_T))
+        gripper_pose = rel_T.dot(place_pose) # This code should be checked.
         approaching_pose = deepcopy(gripper_pose)
 
         req = MoveitPlanningGripperPoseRequest()
