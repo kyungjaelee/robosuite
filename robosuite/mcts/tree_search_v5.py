@@ -5,21 +5,10 @@ import random
 
 import numpy as np
 
-# import rospy
-# from moveit_msgs.srv import *
-# from moveit_msgs.msg import *
-# from shape_msgs.msg import *
-# from geometry_msgs.msg import *
-# from mujoco_moveit_connector.srv import *
-
 from robosuite.mcts.util_v3 import *
-# from robosuite.utils import transform_utils as tf
-# import trimesh.proximity
 
 import networkx as nx
 from networkx.drawing.nx_agraph import graphviz_layout
-
-# import torch
 
 from matplotlib import pyplot as plt
 
@@ -197,131 +186,134 @@ class Tree(object):
         self.planning_with_gripper_pose_proxy = _planning_with_gripper_pose_proxy
         self.planning_with_arm_joints_proxy = _planning_with_arm_joints_proxy
 
-    # def exploration(self, state_node):
-    #     depth = self.Tree.nodes[state_node]['depth']
-    #     visit = self.Tree.nodes[state_node]['visit']
-    #     left_joint_values = self.Tree.nodes[state_node]['left_joint_values']
-    #     left_gripper_width = self.Tree.nodes[state_node]['left_gripper_width']
-    #     right_joint_values = self.Tree.nodes[state_node]['right_joint_values']
-    #     right_gripper_width = self.Tree.nodes[state_node]['right_gripper_width']
-    #
-    #     self.Tree.update(nodes=[(state_node, {'visit': visit + 1})])
-    #
-    #     if depth <= self.max_depth:
-    #         obj_list = self.Tree.nodes[state_node]['state']
-    #         action_nodes = [action_node for action_node in self.Tree.neighbors(state_node)]
-    #         if obj_list is None:
-    #             return 0.0
-    #         elif len(action_nodes) == 0:
-    #             action_list = get_possible_actions(obj_list, self.meshes, coll_mngr, contact_points, contact_faces, rotation_types,
-    #                                                side_place_flag=self.side_place_flag,
-    #                                                goal_obj=self.goal_obj)
-    #             if len(action_list) == 0:
-    #                 return 0.0
-    #             else:
-    #                 for action in action_list:
-    #                     set_of_next_obj_list = get_possible_transitions(obj_list, action, _physical_checker=lambda x, y, z: self.physcial_constraint_checker(x, y, z, self.meshes, network=self.network))
-    #                     if len(set_of_next_obj_list) > 0:
-    #                         reward_list = []
-    #                         for next_obj_list in set_of_next_obj_list:
-    #                             reward = get_reward(obj_list, action, self.goal_obj, next_obj_list, self.meshes)
-    #                             reward_list.append(reward)
-    #
-    #                         sort_indices = np.argsort(reward_list)
-    #                         reward_list = [reward_list[i] for i in sort_indices]
-    #                         set_of_next_obj_list = [set_of_next_obj_list[i] for i in sort_indices]
-    #
-    #                         child_action_node = self.Tree.number_of_nodes()
-    #                         self.Tree.add_node(child_action_node)
-    #                         self.Tree.update(nodes=[(child_action_node,
-    #                                                  {'depth': depth,
-    #                                                   'state': obj_list,
-    #                                                   'action': action,
-    #                                                   'reward': 0.,
-    #                                                   'value': -np.inf,
-    #                                                   'done': False,
-    #                                                   'visit': 0,
-    #                                                   'next_states': set_of_next_obj_list,
-    #                                                   'next_rewards': reward_list,
-    #                                                   'left_joint_values': left_joint_values,
-    #                                                   'left_gripper_width': left_gripper_width,
-    #                                                   'right_joint_values': right_joint_values,
-    #                                                   'right_gripper_width': right_gripper_width})])
-    #                         self.Tree.add_edge(state_node, child_action_node)
-    #                 action_nodes = [action_node for action_node in self.Tree.neighbors(state_node)]
-    #
-    #         if len(action_nodes) > 0:
-    #             action_values = [self.Tree.nodes[action_node]['value'] for action_node in action_nodes]
-    #             action_visits = [self.Tree.nodes[action_node]['visit'] for action_node in action_nodes]
-    #             action_list = [self.Tree.nodes[action_node]['action'] for action_node in action_nodes]
-    #
-    #             eps = np.maximum(np.minimum(1., 1 / np.maximum(visit, 1)), 0.01)
-    #             if np.any(['place' in action['type'] for action in action_list]):
-    #                 if self.goal_obj is not None:
-    #                     table_place_indices = [action_idx for action_idx, action in enumerate(action_list) if
-    #                                            'table' in action['param']]
-    #                     if len(table_place_indices) > 0:
-    #                         selected_idx = sampler(self.exploration_method, action_values, action_visits, depth, _indices=table_place_indices, eps=eps)
-    #                     else:
-    #                         selected_idx = sampler(self.exploration_method, action_values, action_visits, depth, eps=eps)
-    #                 else:
-    #                     non_table_place_indices = [action_idx for action_idx, action in enumerate(action_list) if
-    #                                                'table' not in action['param']]
-    #                     if len(non_table_place_indices) > 0:
-    #                         selected_idx = sampler(self.exploration_method, action_values, action_visits, depth, _indices=non_table_place_indices, eps=eps)
-    #                     else:
-    #                         selected_idx = sampler(self.exploration_method, action_values, action_visits, depth, eps=eps)
-    #             else:
-    #                 selected_idx = sampler(self.exploration_method, action_values, action_visits, depth, eps=eps)
-    #             selected_action_node = action_nodes[selected_idx]
-    #             selected_action_value = action_values[selected_idx]
-    #             selected_action_value_new = self.action_exploration(selected_action_node)
-    #
-    #             if selected_action_value < selected_action_value_new:
-    #                 action_values[selected_idx] = selected_action_value_new
-    #                 self.Tree.update(nodes=[(state_node, {'value': np.max(action_values)})])
-    #             return np.max(action_values)
-    #         else:
-    #             return 0.0
-    #     else:
-    #         return 0.0
-    #
-    # def action_exploration(self, action_node):
-    #     depth = self.Tree.nodes[action_node]['depth']
-    #     action_value = self.Tree.nodes[action_node]['value']
-    #     visit = self.Tree.nodes[action_node]['visit']
-    #     left_joint_values = self.Tree.nodes[action_node]['left_joint_values']
-    #     left_gripper_width = self.Tree.nodes[action_node]['left_gripper_width']
-    #     right_joint_values = self.Tree.nodes[action_node]['right_joint_values']
-    #     right_gripper_width = self.Tree.nodes[action_node]['right_gripper_width']
-    #
-    #     self.Tree.update(nodes=[(action_node, {'visit': visit + 1})])
-    #
-    #     next_states = self.Tree.nodes[action_node]['next_states']
-    #     next_rewards = self.Tree.nodes[action_node]['next_rewards']
-    #     next_state, next_reward = next_states[-1], next_rewards[-1]
-    #     child_node = self.Tree.number_of_nodes()
-    #     self.Tree.add_node(child_node)
-    #     self.Tree.update(nodes=[(child_node,
-    #                              {'depth': depth + 1,
-    #                               'state': next_state,
-    #                               'reward': next_reward,
-    #                               'value': -np.inf,
-    #                               'visit': 0,
-    #                               'left_joint_values': left_joint_values,
-    #                               'left_gripper_width': left_gripper_width,
-    #                               'right_joint_values': right_joint_values,
-    #                               'right_gripper_width': right_gripper_width,
-    #                               'planned_traj_list': []})])
-    #     self.Tree.add_edge(action_node, child_node)
-    #
-    #     next_state_node = child_node
-    #
-    #     action_value_new = next_reward + self.exploration(next_state_node)
-    #     if action_value < action_value_new:
-    #         self.Tree.update(nodes=[(action_node, {'value': action_value_new})])
-    #
-    #     return action_value_new
+    def exploration(self, state_node):
+        depth = self.Tree.nodes[state_node]['depth']
+        visit = self.Tree.nodes[state_node]['visit']
+        left_joint_values = self.Tree.nodes[state_node]['left_joint_values']
+        left_gripper_width = self.Tree.nodes[state_node]['left_gripper_width']
+        right_joint_values = self.Tree.nodes[state_node]['right_joint_values']
+        right_gripper_width = self.Tree.nodes[state_node]['right_gripper_width']
+
+        self.Tree.update(nodes=[(state_node, {'visit': visit + 1})])
+
+        if depth <= self.max_depth:
+            obj_list = self.Tree.nodes[state_node]['state']
+            action_nodes = [action_node for action_node in self.Tree.neighbors(state_node)]
+            if obj_list is None:
+                return 0.0
+            elif len(action_nodes) == 0:
+                action_list = get_possible_actions(obj_list, self.meshes, self.coll_mngr, self.contact_points, self.contact_faces, self.rotation_types,
+                                                   side_place_flag=self.side_place_flag,
+                                                   goal_obj=self.goal_obj)
+                if len(action_list) == 0:
+                    return 0.0
+                else:
+                    for action in action_list:
+                        set_of_next_obj_list = get_possible_transitions(obj_list, action, _physical_checker=lambda x, y, z: self.physcial_constraint_checker(x, y, z, self.meshes, network=self.network))
+                        if len(set_of_next_obj_list) > 0:
+                            reward_list = []
+                            for next_obj_list in set_of_next_obj_list:
+                                reward = get_reward(obj_list, action, self.goal_obj, next_obj_list, self.meshes)
+                                reward_list.append(reward)
+
+                            sort_indices = np.argsort(reward_list)
+                            reward_list = [reward_list[i] for i in sort_indices]
+                            set_of_next_obj_list = [set_of_next_obj_list[i] for i in sort_indices]
+
+                            child_action_node = self.Tree.number_of_nodes()
+                            self.Tree.add_node(child_action_node)
+                            self.Tree.update(nodes=[(child_action_node,
+                                                     {'depth': depth,
+                                                      'state': obj_list,
+                                                      'action': action,
+                                                      'reward': 0.,
+                                                      'value': -np.inf,
+                                                      'done': False,
+                                                      'visit': 0,
+                                                      'next_states': set_of_next_obj_list,
+                                                      'next_rewards': reward_list,
+                                                      'left_joint_values': left_joint_values,
+                                                      'left_gripper_width': left_gripper_width,
+                                                      'right_joint_values': right_joint_values,
+                                                      'right_gripper_width': right_gripper_width})])
+                            self.Tree.add_edge(state_node, child_action_node)
+                    action_nodes = [action_node for action_node in self.Tree.neighbors(state_node)]
+
+            if len(action_nodes) > 0:
+                action_values = [self.Tree.nodes[action_node]['value'] for action_node in action_nodes]
+                action_visits = [self.Tree.nodes[action_node]['visit'] for action_node in action_nodes]
+                action_list = [self.Tree.nodes[action_node]['action'] for action_node in action_nodes]
+
+                eps = np.maximum(np.minimum(1., 1 / np.maximum(visit, 1)), 0.01)
+                if np.any(['place' in action['type'] for action in action_list]):
+                    if self.goal_obj is not None:
+                        table_place_indices = [action_idx for action_idx, action in enumerate(action_list) if
+                                               'table' in action['param']]
+                        if len(table_place_indices) > 0:
+                            selected_idx = sampler(self.exploration_method, action_values, action_visits, depth, _indices=table_place_indices, eps=eps)
+                        else:
+                            selected_idx = sampler(self.exploration_method, action_values, action_visits, depth, eps=eps)
+                    else:
+                        non_table_place_indices = [action_idx for action_idx, action in enumerate(action_list) if
+                                                   'table' not in action['param']]
+                        if len(non_table_place_indices) > 0:
+                            selected_idx = sampler(self.exploration_method, action_values, action_visits, depth, _indices=non_table_place_indices, eps=eps)
+                        else:
+                            selected_idx = sampler(self.exploration_method, action_values, action_visits, depth, eps=eps)
+                else:
+                    selected_idx = sampler(self.exploration_method, action_values, action_visits, depth, eps=eps)
+                selected_action_node = action_nodes[selected_idx]
+                selected_action_value = action_values[selected_idx]
+                selected_action_value_new = self.action_exploration(selected_action_node)
+
+                if selected_action_value < selected_action_value_new:
+                    action_values[selected_idx] = selected_action_value_new
+                    self.Tree.update(nodes=[(state_node, {'value': np.max(action_values)})])
+                return np.max(action_values)
+            else:
+                return 0.0
+        else:
+            return 0.0
+
+    def action_exploration(self, action_node):
+        depth = self.Tree.nodes[action_node]['depth']
+        action_value = self.Tree.nodes[action_node]['value']
+        visit = self.Tree.nodes[action_node]['visit']
+        left_joint_values = self.Tree.nodes[action_node]['left_joint_values']
+        left_gripper_width = self.Tree.nodes[action_node]['left_gripper_width']
+        right_joint_values = self.Tree.nodes[action_node]['right_joint_values']
+        right_gripper_width = self.Tree.nodes[action_node]['right_gripper_width']
+
+        self.Tree.update(nodes=[(action_node, {'visit': visit + 1})])
+
+        if visit == 0:
+            next_states = self.Tree.nodes[action_node]['next_states']
+            next_rewards = self.Tree.nodes[action_node]['next_rewards']
+            next_state, next_reward = next_states[-1], next_rewards[-1]
+            child_node = self.Tree.number_of_nodes()
+            self.Tree.add_node(child_node)
+            self.Tree.update(nodes=[(child_node,
+                                     {'depth': depth + 1,
+                                      'state': next_state,
+                                      'reward': next_reward,
+                                      'value': -np.inf,
+                                      'visit': 0,
+                                      'left_joint_values': left_joint_values,
+                                      'left_gripper_width': left_gripper_width,
+                                      'right_joint_values': right_joint_values,
+                                      'right_gripper_width': right_gripper_width,
+                                      'planned_traj_list': []})])
+            self.Tree.add_edge(action_node, child_node)
+            next_state_node = child_node
+        else:
+            next_state_nodes = [next_state_node for next_state_node in self.Tree.neighbors(action_node)]
+            next_state_node = next_state_nodes[0]
+
+        action_value_new = self.Tree.nodes[next_state_node]['reward'] + self.exploration(next_state_node)
+        if action_value < action_value_new:
+            self.Tree.update(nodes=[(action_node, {'value': action_value_new})])
+
+        return action_value_new
 
     # def kinematic_exploration_v3(self, state_node=0):
     #     depth = self.KinematicTree.nodes[state_node]['depth']
@@ -435,7 +427,7 @@ class Tree(object):
                                        _compute_fk_proxy=self.compute_fk_proxy)
 
                 if new_next_object_list is not None:
-                    visualize(new_next_object_list, self.meshes, self.goal_obj)
+                    # visualize(new_next_object_list, self.meshes, self.goal_obj)
                     self.Tree.update(nodes=[(next_state_node, {'state': new_next_object_list})])
                     self.Tree.update(nodes=[(next_state_node, {'left_joint_values': next_left_joint_values})])
                     self.Tree.update(nodes=[(next_state_node, {'left_gripper_width': next_left_gripper_width})])
@@ -483,7 +475,7 @@ class Tree(object):
                                 action["gripper_widths"] = [action["gripper_widths"][i] for i in sort_indices]
                             else:
                                 action["placing_poses"] = [action["placing_poses"][i] for i in sort_indices]
-                            print(sort_indices)
+                            # print(sort_indices)
 
                             child_action_node = self.Tree.number_of_nodes()
                             self.Tree.add_node(child_action_node)
@@ -597,15 +589,21 @@ class Tree(object):
                     if len(self.Tree.nodes[next_state_node]['planned_traj_list']) > 0:
                         reward = self.Tree.nodes[next_state_node]['reward']
                         sub_tree_paths, sub_tree_values, sub_tree_kinematic_plans = self.get_all_kinematic_path(next_state_node)
-                        for sub_tree_path, sub_tree_value, sub_tree_kinematic_plan in zip(sub_tree_paths, sub_tree_values, sub_tree_kinematic_plans):
-                            paths.append([state_node, action_node, next_state_node]+sub_tree_path)
-                            values.append(reward + sub_tree_value)
-                            kinematic_plans.append(self.Tree.nodes[next_state_node]['planned_traj_list'] + sub_tree_kinematic_plan)
+                        if len(sub_tree_paths) > 0:
+                            for sub_tree_path, sub_tree_value, sub_tree_kinematic_plan in zip(sub_tree_paths, sub_tree_values, sub_tree_kinematic_plans):
+                                paths.append([state_node, action_node, ]+sub_tree_path)
+                                values.append(reward + sub_tree_value)
+                                kinematic_plans.append(self.Tree.nodes[next_state_node]['planned_traj_list'] + sub_tree_kinematic_plan)
+                        else:
+                            paths.append([state_node, action_node, next_state_node])
+                            values.append(reward)
+                            kinematic_plans.append(self.Tree.nodes[next_state_node]['planned_traj_list'])
             path_indices = np.argsort(values)
-            print(path_indices)
-            values = values[path_indices]
-            paths = paths[path_indices]
-            kinematic_plans = kinematic_plans[path_indices]
+            if len(values) > 0:
+                values = [values[indx] for indx in path_indices]
+                paths = [paths[indx] for indx in path_indices]
+                kinematic_plans = [kinematic_plans[indx] for indx in path_indices]
+            # print(paths)
         return paths, values, kinematic_plans
 
     def visualize(self):

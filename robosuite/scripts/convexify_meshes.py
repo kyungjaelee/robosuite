@@ -18,7 +18,9 @@ if __name__ == '__main__':
     # mesh_units = [0.001, 0.001, 0.001, 0.001, 0.001, 0.01]
     # mesh_types = ['tower_goal']
     # mesh_files = ['/home/kj/robosuite/robosuite/models/assets/objects/']
-    mesh_types = ['twin_tower_goal']
+    # mesh_types = ['twin_tower_goal']
+    # mesh_files = ['/home/kj/robosuite/robosuite/models/assets/objects/']
+    mesh_types = ['jenga_goal']
     mesh_files = ['/home/kj/robosuite/robosuite/models/assets/objects/']
     # mesh_types = ['box_goal']
     # mesh_files = ['/home/kj/robosuite/robosuite/models/assets/objects/']
@@ -28,7 +30,10 @@ if __name__ == '__main__':
     meshes = []
 for mesh_type, mesh_file, unit in zip(mesh_types, mesh_files, mesh_units):
         mesh = trimesh.load(mesh_file+'meshes/'+mesh_type+'.stl')
-
+        if isinstance(mesh, trimesh.Scene):
+            mesh = trimesh.util.concatenate(
+                tuple(trimesh.Trimesh(vertices=g.vertices, faces=g.faces)
+                      for g in mesh.geometry.values()))
         # clean mesh vertices and surfaces
         # mesh.remove_degenerate_faces()
         # mesh.remove_unreferenced_vertices()

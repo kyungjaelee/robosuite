@@ -91,6 +91,10 @@ def get_meshes(_mesh_types=None, _mesh_files=None, _mesh_units=None, _area_ths=0
         else:
             faces = np.arange(mesh.faces.shape[0])
             points = np.mean(mesh.vertices[mesh.faces], axis=1)
+            sample_points, sample_faces = mesh.sample(100, return_index=True)
+            
+            faces = np.concatenate([faces, sample_faces])
+            points = np.concatenate([points, sample_points])
 
         _meshes.append(mesh)
         _contact_faces.append(faces)
@@ -315,7 +319,6 @@ def configuration_initializer(_mesh_types, _meshes, _mesh_units, _rotation_types
     elif 'twin_tower_goal' is goal_name:
         n_obj_per_mesh_types = [0, 2, 2, 0, 2, 0, 0, 0, 0, 0]
     elif 'box_goal' is goal_name:
-        # n_obj_per_mesh_types = [0, 2, 2, 0, 0, 0, 0, 0, 0, 0]
         n_obj_per_mesh_types = [0, 1, 2, 1, 1, 0, 0, 0, 0, 0]
     elif 'stack_very_easy' is goal_name:
         n_obj_per_mesh_types = [0, 1, 1, 0, 0, 0, 0, 0, 0, 0]
@@ -426,7 +429,7 @@ def configuration_initializer(_mesh_types, _meshes, _mesh_units, _rotation_types
                                             table_T, _coll_mngr)
                         if pose1 is not None:
                             min_dist1 = np.min([np.sqrt(np.sum(np.square(tmp_obj.pose[:3, 3] - pose1[:3, 3]))) for tmp_obj in _object_list if tmp_obj.name not in new_obj.name])
-                            if min_dist1 > 0.12:
+                            if min_dist1 > 0.1:
                                 pose1_list.append(pose1)
             # print(new_obj.name, len(pose1_list))
             if len(pose1_list) > 0:
@@ -572,6 +575,7 @@ def get_possible_transitions(_object_list, _action, _physical_checker=None):
         held_obj_idx = get_held_object(_object_list)
         gripper_obj_idx = get_obj_idx_by_name(_object_list, 'left_gripper')
         new_poses = _action["placing_poses"]
+        _placing_poses = []
         _set_of_next_object_list = []
         for new_pose in new_poses:
             _next_object_list = deepcopy(_object_list)
@@ -586,8 +590,11 @@ def get_possible_transitions(_object_list, _action, _physical_checker=None):
             if _physical_checker is not None:
                 if _physical_checker(_object_list, _action, _next_object_list):
                     _set_of_next_object_list.append(_next_object_list)
+                    _placing_poses.append(new_pose)
             else:
                 _set_of_next_object_list.append(_next_object_list)
+                _placing_poses.append(new_pose)
+        _action["placing_poses"] = _placing_poses # Modify original placing poses
     return _set_of_next_object_list
 
 
@@ -826,30 +833,24 @@ def kinematic_planning(_object_list, _next_object_list,
                                            _get_planning_scene_proxy=_get_planning_scene_proxy,
                                            _apply_planning_scene_proxy=_apply_planning_scene_proxy)
 
-                req = MoveitPlanningJointValuesRequest()
+                req = MoveitPlanningGripperPoseRequest()
                 req.group_name = "left_arm"
                 req.ntrial = 10
-                req.joint_names = list(_init_left_joint_values.keys())
-                req.joint_poses = list(_init_left_joint_values.values())
+                req.gripper_pose = transform_matrix2pose(hand_t_retreat)
+                req.gripper_pose.position.z -= 0.93
+                req.gripper_link = "left_gripper"
+                resp = _planning_with_gripper_pose_proxy(req)
+                preretreat_planning_result = resp.success
+                preretreat_planned_traj = resp.plan
 
-                resp = _planning_with_arm_joints_proxy(req)
-                retreat_planning_result = resp.success
-                retreat_planned_traj = resp.plan
-
-                if retreat_planning_result:
-                    print("Planning to retreat succeeds.")
-                    planned_traj_list.append(retreat_planned_traj)
-                    _after_retreat_left_joint_values = dict(zip(retreat_planned_traj.joint_names, retreat_planned_traj.points[-1].positions))
-                    synchronize_planning_scene(_after_retreat_left_joint_values, gripper_width, _right_joint_values,
-                                               _right_gripper_width,
-                                               _next_object_list, _meshes,
-                                               _get_planning_scene_proxy=_get_planning_scene_proxy,
-                                               _apply_planning_scene_proxy=_apply_planning_scene_proxy)
+                if preretreat_planning_result:
+                    planned_traj_list.append(preretreat_planned_traj)
+                    _after_preretreat_left_joint_values = dict(zip(preretreat_planned_traj.joint_names, preretreat_planned_traj.points[-1].positions))
 
                     resp = _get_planning_scene_proxy(GetPlanningSceneRequest())
                     current_scene = resp.scene
-                    rel_obj_pose = deepcopy(current_scene.robot_state.attached_collision_objects[0].object.mesh_poses[0])
-                    rel_T = pose2transform_matrix(rel_obj_pose)
+                    rel_preretreat_obj_pose = deepcopy(current_scene.robot_state.attached_collision_objects[0].object.mesh_poses[0])
+                    rel_T = pose2transform_matrix(rel_preretreat_obj_pose)
 
                     req = GetPositionFKRequest()
                     req.fk_link_names = ['left_gripper']
@@ -860,11 +861,55 @@ def kinematic_planning(_object_list, _next_object_list,
                     gripper_T = pose2transform_matrix(resp.pose_stamped[0].pose)
                     gripper_T[2, 3] += 0.93
                     pick_obj_idx = get_obj_idx_by_name(_object_list, _action['param'])
-                    new_next_object_list = deepcopy(_next_object_list)
-                    new_next_object_list[pick_obj_idx].pose = gripper_T.dot(rel_T)
-                    new_next_object_list[-1].pose = gripper_T
+                    preretreat_object_list = deepcopy(_next_object_list)
+                    preretreat_object_list[pick_obj_idx].pose = gripper_T.dot(rel_T)
+                    preretreat_object_list[-1].pose = gripper_T
 
-                    return new_next_object_list, _after_retreat_left_joint_values, gripper_width, _right_joint_values, _right_gripper_width, planned_traj_list
+                    synchronize_planning_scene(_after_preretreat_left_joint_values, gripper_width, _right_joint_values,
+                                               _right_gripper_width,
+                                               preretreat_object_list, _meshes,
+                                               _get_planning_scene_proxy=_get_planning_scene_proxy,
+                                               _apply_planning_scene_proxy=_apply_planning_scene_proxy)
+
+                    req = MoveitPlanningJointValuesRequest()
+                    req.group_name = "left_arm"
+                    req.ntrial = 10
+                    req.joint_names = list(_init_left_joint_values.keys())
+                    req.joint_poses = list(_init_left_joint_values.values())
+
+                    resp = _planning_with_arm_joints_proxy(req)
+                    retreat_planning_result = resp.success
+                    retreat_planned_traj = resp.plan
+
+                    if retreat_planning_result:
+                        print("Planning to retreat succeeds.")
+                        planned_traj_list.append(retreat_planned_traj)
+                        _after_retreat_left_joint_values = dict(zip(retreat_planned_traj.joint_names, retreat_planned_traj.points[-1].positions))
+                        synchronize_planning_scene(_after_retreat_left_joint_values, gripper_width, _right_joint_values,
+                                                   _right_gripper_width,
+                                                   _next_object_list, _meshes,
+                                                   _get_planning_scene_proxy=_get_planning_scene_proxy,
+                                                   _apply_planning_scene_proxy=_apply_planning_scene_proxy)
+
+                        resp = _get_planning_scene_proxy(GetPlanningSceneRequest())
+                        current_scene = resp.scene
+                        rel_obj_pose = deepcopy(current_scene.robot_state.attached_collision_objects[0].object.mesh_poses[0])
+                        rel_T = pose2transform_matrix(rel_obj_pose)
+
+                        req = GetPositionFKRequest()
+                        req.fk_link_names = ['left_gripper']
+                        req.header.frame_id = 'world'
+                        req.robot_state = current_scene.robot_state
+                        resp = _compute_fk_proxy(req)
+
+                        gripper_T = pose2transform_matrix(resp.pose_stamped[0].pose)
+                        gripper_T[2, 3] += 0.93
+                        pick_obj_idx = get_obj_idx_by_name(_object_list, _action['param'])
+                        new_next_object_list = deepcopy(_next_object_list)
+                        new_next_object_list[pick_obj_idx].pose = gripper_T.dot(rel_T)
+                        new_next_object_list[-1].pose = gripper_T
+
+                        return new_next_object_list, _after_retreat_left_joint_values, gripper_width, _right_joint_values, _right_gripper_width, planned_traj_list
 
     if _action["type"] is "place":
         # gripper_obj_idx = get_obj_idx_by_name(_object_list, 'left_gripper')
@@ -873,12 +918,13 @@ def kinematic_planning(_object_list, _next_object_list,
         resp = _get_planning_scene_proxy(GetPlanningSceneRequest())
         current_scene = resp.scene
         rel_obj_pose = deepcopy(current_scene.robot_state.attached_collision_objects[0].object.mesh_poses[0])
+        # print(current_scene.robot_state.attached_collision_objects[0].object)
         rel_T = pose2transform_matrix(rel_obj_pose)
 
         # rel_gripper = np.linalg.inv(_next_object_list[held_obj_idx].pose).dot(_next_object_list[gripper_obj_idx].pose)
 
         place_pose = _action["placing_poses"][-1]
-        gripper_pose = rel_T.dot(place_pose) # This code should be checked.
+        gripper_pose = place_pose.dot(np.linalg.inv(rel_T)) # This code should be checked.
         approaching_pose = deepcopy(gripper_pose)
 
         req = MoveitPlanningGripperPoseRequest()
@@ -906,7 +952,7 @@ def kinematic_planning(_object_list, _next_object_list,
             req = MoveitPlanningGripperPoseRequest()
             req.group_name = "left_arm"
             req.ntrial = 20
-            req.gripper_pose = transform_matrix2pose(gripper_pose)
+            req.gripper_pose = transform_matrix2pose(approaching_pose)
             req.gripper_pose.position.z -= 0.93
             req.gripper_link = "left_gripper"
             resp = _cartesian_planning_with_gripper_pose_proxy(req)
@@ -915,6 +961,9 @@ def kinematic_planning(_object_list, _next_object_list,
 
             if planning_result:
                 print("Planning to place succeeds.")
+
+                # visualize(_next_object_list, _meshes, None)
+
                 planned_traj_list.append(planned_traj)
                 _after_place_left_joint_values = dict(
                     zip(planned_traj.joint_names, planned_traj.points[-1].positions))
@@ -925,21 +974,11 @@ def kinematic_planning(_object_list, _next_object_list,
                                            _get_planning_scene_proxy=_get_planning_scene_proxy,
                                            _apply_planning_scene_proxy=_apply_planning_scene_proxy)
 
-                resp = _get_planning_scene_proxy(GetPlanningSceneRequest())
-                current_scene = resp.scene
-
-                req = GetPositionFKRequest()
-                req.fk_link_names = ['left_gripper']
-                req.header.frame_id = 'world'
-                req.robot_state = current_scene.robot_state
-                resp = _compute_fk_proxy(req)
-                gripper_T = pose2transform_matrix(resp.pose_stamped[0].pose)
-                gripper_T[:3, 3] = gripper_T[:3, 3] - 6e-2 * gripper_T[:3, 2]
-
                 req = MoveitPlanningGripperPoseRequest()
                 req.group_name = "left_arm"
                 req.ntrial = 20
-                req.gripper_pose = transform_matrix2pose(gripper_T)
+                req.gripper_pose = transform_matrix2pose(approaching_pose)
+                req.gripper_pose.position.z -= 0.93 - 0.06
                 req.gripper_link = "left_gripper"
                 resp = _cartesian_planning_with_gripper_pose_proxy(req)
                 after_place_planning_result = resp.success
